@@ -1,0 +1,12 @@
+{
+    "userName": "tech1337",
+    "passSalted": "xxxxxxxxxxxx",
+    "routes": [
+        {
+            "label": "Home",
+            "path": "/home"
+        }
+
+    ]
+
+}
