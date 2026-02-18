@@ -6,20 +6,26 @@ import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 
 const CAMERA_POSITION = [30, 18, 35];
 const qTailOffset = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), -Math.PI / 2);
+const qSimStlOffset = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 2);
 const DEFAULT_STL = "/tailsitter.stl";
 const PATH_ELEVATION = 0.08;
 const MIN_PATH_POINT_SEPARATION_SQ = 0.0004;
 const MAX_PATH_POINTS = 12000;
 
-function StlVehicle({ sample, stlPath, modelScale }) {
+function StlVehicle({ sample, stlPath, modelScale, simMode, simLerpAlpha, simSlerpAlpha, enableShadows }) {
   const geometry = useLoader(STLLoader, stlPath);
   const meshRef = useRef();
   const sampleRef = useRef(sample ?? null);
+  const initializedRef = useRef(false);
   const sampleQuat = useMemo(() => new Quaternion(), []);
   const renderQuat = useMemo(() => new Quaternion(), []);
+  const targetPos = useMemo(() => new Vector3(), []);
 
   useEffect(() => {
     sampleRef.current = sample ?? null;
+    if (!sample) {
+      initializedRef.current = false;
+    }
   }, [sample]);
 
   useEffect(() => {
@@ -32,7 +38,7 @@ function StlVehicle({ sample, stlPath, modelScale }) {
     if (!meshRef.current || !current) {
       return;
     }
-    meshRef.current.position.set(current.position[0], current.position[1], current.position[2]);
+    targetPos.set(current.position[0], current.position[1], current.position[2]);
     sampleQuat.set(
       current.quaternion[0],
       current.quaternion[1],
@@ -40,24 +46,48 @@ function StlVehicle({ sample, stlPath, modelScale }) {
       current.quaternion[3],
     );
     renderQuat.copy(sampleQuat).multiply(qTailOffset);
-    meshRef.current.quaternion.copy(renderQuat);
+    if (simMode) {
+      renderQuat.multiply(qSimStlOffset);
+    }
+
+    if (!simMode) {
+      meshRef.current.position.copy(targetPos);
+      meshRef.current.quaternion.copy(renderQuat);
+      initializedRef.current = true;
+      return;
+    }
+
+    if (!initializedRef.current) {
+      meshRef.current.position.copy(targetPos);
+      meshRef.current.quaternion.copy(renderQuat);
+      initializedRef.current = true;
+      return;
+    }
+
+    meshRef.current.position.lerp(targetPos, simLerpAlpha);
+    meshRef.current.quaternion.slerp(renderQuat, simSlerpAlpha);
   });
 
   return (
-    <mesh ref={meshRef} geometry={geometry} scale={modelScale} castShadow receiveShadow>
+    <mesh ref={meshRef} geometry={geometry} scale={modelScale} castShadow={enableShadows} receiveShadow={enableShadows}>
       <meshStandardMaterial color="#d8e4ff" metalness={0.25} roughness={0.4} />
     </mesh>
   );
 }
 
-function DummyVehicle({ sample }) {
+function DummyVehicle({ sample, simMode, simLerpAlpha, simSlerpAlpha, enableShadows }) {
   const groupRef = useRef();
   const sampleRef = useRef(sample ?? null);
+  const initializedRef = useRef(false);
   const sampleQuat = useMemo(() => new Quaternion(), []);
   const renderQuat = useMemo(() => new Quaternion(), []);
+  const targetPos = useMemo(() => new Vector3(), []);
 
   useEffect(() => {
     sampleRef.current = sample ?? null;
+    if (!sample) {
+      initializedRef.current = false;
+    }
   }, [sample]);
 
   useFrame(() => {
@@ -65,7 +95,7 @@ function DummyVehicle({ sample }) {
     if (!groupRef.current || !current) {
       return;
     }
-    groupRef.current.position.set(current.position[0], current.position[1], current.position[2]);
+    targetPos.set(current.position[0], current.position[1], current.position[2]);
     sampleQuat.set(
       current.quaternion[0],
       current.quaternion[1],
@@ -73,24 +103,33 @@ function DummyVehicle({ sample }) {
       current.quaternion[3],
     );
     renderQuat.copy(sampleQuat).multiply(qTailOffset);
-    groupRef.current.quaternion.copy(renderQuat);
+
+    if (!simMode || !initializedRef.current) {
+      groupRef.current.position.copy(targetPos);
+      groupRef.current.quaternion.copy(renderQuat);
+      initializedRef.current = true;
+      return;
+    }
+
+    groupRef.current.position.lerp(targetPos, simLerpAlpha);
+    groupRef.current.quaternion.slerp(renderQuat, simSlerpAlpha);
   });
 
   return (
     <group ref={groupRef} scale={1.1}>
-      <mesh castShadow receiveShadow>
+      <mesh castShadow={enableShadows} receiveShadow={enableShadows}>
         <boxGeometry args={[2.2, 0.4, 0.4]} />
         <meshStandardMaterial color="#cbd5f5" metalness={0.1} roughness={0.6} />
       </mesh>
-      <mesh position={[0, 0, 0.5]} castShadow>
+      <mesh position={[0, 0, 0.5]} castShadow={enableShadows}>
         <boxGeometry args={[0.5, 0.5, 1.4]} />
         <meshStandardMaterial color="#7dd3fc" />
       </mesh>
-      <mesh position={[0, 0.6, 0]} castShadow>
+      <mesh position={[0, 0.6, 0]} castShadow={enableShadows}>
         <boxGeometry args={[1.8, 0.2, 0.3]} />
         <meshStandardMaterial color="#a5b4fc" />
       </mesh>
-      <mesh position={[0, -0.6, 0]} castShadow>
+      <mesh position={[0, -0.6, 0]} castShadow={enableShadows}>
         <boxGeometry args={[1.8, 0.2, 0.3]} />
         <meshStandardMaterial color="#a5b4fc" />
       </mesh>
@@ -192,23 +231,36 @@ function CameraFollower({ activeSample, followCamera, controlsRef }) {
   return null;
 }
 
-export default function FlightScene({ samples, activeSample, modelType, modelScale, customModelUrl, followCamera }) {
+export default function FlightScene({
+  samples,
+  activeSample,
+  modelType,
+  modelScale,
+  customModelUrl,
+  followCamera,
+  simMode,
+  simSmoothing = 0.55,
+}) {
   const stlPath = modelType === "upload" && customModelUrl ? customModelUrl : DEFAULT_STL;
   const controlsRef = useRef();
+  const enableShadows = !simMode;
+  const smoothing = Math.min(1, Math.max(0, simSmoothing));
+  const simLerpAlpha = 0.44 - smoothing * 0.35;
+  const simSlerpAlpha = 0.4 - smoothing * 0.32;
 
   return (
-    <Canvas shadows camera={{ position: CAMERA_POSITION, fov: 50 }} dpr={[1, 1.75]}>
+    <Canvas shadows={enableShadows} camera={{ position: CAMERA_POSITION, fov: 50 }} dpr={simMode ? [1, 1.3] : [1, 1.75]}>
       <color attach="background" args={["#050912"]} />
       <ambientLight intensity={0.42} />
       <directionalLight
         position={[45, 60, 30]}
         intensity={1.35}
-        castShadow
-        shadow-mapSize={[2048, 2048]}
+        castShadow={enableShadows}
+        shadow-mapSize={enableShadows ? [2048, 2048] : [512, 512]}
       />
       <OrbitControls ref={controlsRef} maxDistance={160} minDistance={6} enablePan enableDamping dampingFactor={0.08} />
       <gridHelper args={[400, 80, 0x2b5b88, 0x1d3b58]} position={[0, 0, 0]} />
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]} receiveShadow>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]} receiveShadow={enableShadows}>
         <planeGeometry args={[600, 600]} />
         <meshStandardMaterial color="#13253b" metalness={0} roughness={1} opacity={0.92} transparent />
       </mesh>
@@ -217,14 +269,28 @@ export default function FlightScene({ samples, activeSample, modelType, modelSca
         <meshStandardMaterial color="#f8fafc" emissive="#38bdf8" emissiveIntensity={0.45} />
       </mesh>
       <axesHelper args={[12]} />
-      <FlightPath samples={samples} />
+      {!simMode && <FlightPath samples={samples} />}
       <CameraFollower activeSample={activeSample} followCamera={followCamera} controlsRef={controlsRef} />
       <Suspense fallback={null}>
         {activeSample &&
           (modelType === "dummy" ? (
-            <DummyVehicle sample={activeSample} />
+            <DummyVehicle
+              sample={activeSample}
+              simMode={simMode}
+              simLerpAlpha={simLerpAlpha}
+              simSlerpAlpha={simSlerpAlpha}
+              enableShadows={enableShadows}
+            />
           ) : (
-            <StlVehicle sample={activeSample} stlPath={stlPath} modelScale={modelScale} />
+            <StlVehicle
+              sample={activeSample}
+              stlPath={stlPath}
+              modelScale={modelScale}
+              simMode={simMode}
+              simLerpAlpha={simLerpAlpha}
+              simSlerpAlpha={simSlerpAlpha}
+              enableShadows={enableShadows}
+            />
           ))}
       </Suspense>
     </Canvas>

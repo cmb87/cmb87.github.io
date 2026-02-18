@@ -1,6 +1,11 @@
 # VTOL Flight Visualizer
 
-Interactive React + Three.js viewer that replays PX4 ULog missions with a tailsitter STL model. The scene renders the vehicle attitude/position stream, draws the ground track, and overlays live telemetry in the upper-right corner.
+Interactive React + Three.js viewer with two modes:
+
+- **Log Analyzer**: replay PX4 ULog missions with timeline scrub/playback.
+- **Simulator**: connect to a live websocket stream and render SITL ground-truth in real time.
+
+Both modes share the same STL model pipeline (bundled tailsitter STL, dummy model, or uploaded STL).
 
 ## Getting started
 
@@ -9,7 +14,12 @@ npm install
 npm run dev
 ```
 
-Open the printed local URL (default `http://localhost:5173`) and load your own `.ulg` file via the sidebar, or click **Load sample flight** to use the bundled log in `public/sample-flight.ulg`. Use the **Vehicle mesh** toggle to switch between the bundled STL (`public/tailsitter.stl`) and a simple cube-based dummy body if you want a guaranteed-visible reference model.
+Open the printed local URL (default `http://localhost:5173`) and choose a tab in the header:
+
+- **Log Analyzer**: load your own `.ulg` via the sidebar, or click **Load sample flight** to use `public/sample-flight.ulg`.
+- **Simulator**: set websocket host/port (defaults `127.0.0.1:8765`) and click **Connect**.
+
+Use the **Vehicle mesh** controls in either mode to switch between the bundled STL (`public/tailsitter.stl`), dummy cubes, or an uploaded `.stl`.
 
 > **Node requirement:** The project is set up with Vite 4 so it works on Node 16+, although some upstream packages (for example `camera-controls`) emit warnings when Node < 22. The dev server still runs normally on Node 16/18/20.
 
@@ -17,6 +27,7 @@ Open the printed local URL (default `http://localhost:5173`) and load your own `
 
 - Parses `vehicle_attitude` and `vehicle_local_position` topics in-browser via `@foxglove/ulog`.
 - Converts PX4 NED coordinates to the scene frame, centers the track, and animates the STL with quaternion slerp interpolation.
+- Streams simulator ground-truth telemetry over websocket (default `ws://127.0.0.1:8765`) for live visualization.
 - Tailsitter-aware orientation offset so pitch `0°` renders the aircraft standing nose-up.
 - Ground plane + tracked path for visual context and orientation aids.
 - Artificial-horizon widget synced to the telemetry overlay, plus play/pause, scrub, and playback-speed controls.
