@@ -10,6 +10,8 @@ function FileControls({
   onModelChange,
   modelScale,
   onModelScaleChange,
+  rotateTailsitter90,
+  onRotateTailsitter90Change,
   onCustomStlSelected,
   customStlName,
 }) {
@@ -108,6 +110,16 @@ function FileControls({
           />
           <strong>{modelScale.toFixed(2)}x</strong>
         </label>
+        {modelType !== "dummy" && (
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={rotateTailsitter90}
+              onChange={(event) => onRotateTailsitter90Change(event.target.checked)}
+            />
+            Rotate STL mesh by 90 deg pitch
+          </label>
+        )}
       </div>
 
       <div className="status-block">

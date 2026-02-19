@@ -35,8 +35,10 @@ const DEFAULT_ACTUATOR_LABELS = [
 ];
 const DEFAULT_SIM_HOST = "127.0.0.1";
 const DEFAULT_SIM_PORT = "8765";
-const SIM_TRAIL_POINTS = 50;
-const SIM_UI_UPDATE_INTERVAL_MS = 16;
+const DEFAULT_MODEL_TYPE = "stl";
+const DEFAULT_MODEL_SCALE = 1.2;
+const SIM_MOTION_SCALE = 0.3;
+const SIM_TRAIL_POINTS = 240;
 const NED_TO_SCENE_QUAT = new Quaternion().setFromRotationMatrix(
   new Matrix4().set(
     0,
@@ -58,6 +60,33 @@ const NED_TO_SCENE_QUAT = new Quaternion().setFromRotationMatrix(
   ),
 );
 
+function createSimConnection(id, host = DEFAULT_SIM_HOST, port = DEFAULT_SIM_PORT) {
+  return {
+    id,
+    host,
+    port,
+    connected: false,
+    connecting: false,
+    frameCount: 0,
+    status: "Disconnected",
+    error: null,
+  };
+}
+
+function createDefaultVehicleMeshSettings() {
+  return {
+    modelType: DEFAULT_MODEL_TYPE,
+    modelScale: DEFAULT_MODEL_SCALE,
+    rotateTailsitter90: false,
+    customStlUrl: "",
+    customStlName: "",
+  };
+}
+
+function buildWsUrl(host, port) {
+  return `ws://${host.trim() || DEFAULT_SIM_HOST}:${normalizeWsPort(port)}`;
+}
+
 function normalizeWsPort(value) {
   const parsed = Number.parseInt(String(value), 10);
   if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 65535) {
@@ -70,6 +99,19 @@ function toSceneVector([north = 0, east = 0, down = 0]) {
   return [east, -down, -north];
 }
 
+function formatHudHeading(sample) {
+  const heading = Number.isFinite(sample?.headingDeg)
+    ? sample.headingDeg
+    : Number.isFinite(sample?.euler?.[2])
+      ? (sample.euler[2] * 180) / Math.PI
+      : null;
+  if (!Number.isFinite(heading)) {
+    return "-";
+  }
+  const normalized = ((heading % 360) + 360) % 360;
+  return `${normalized.toFixed(0)} deg`;
+}
+
 function firstFinite(values, fallback = null) {
   for (const value of values) {
     const number = Number(value);
@@ -78,6 +120,17 @@ function firstFinite(values, fallback = null) {
     }
   }
   return fallback;
+}
+
+function normalizeActuatorCommands(values) {
+  const source = Array.isArray(values) ? values : [];
+  return Array.from({ length: 8 }, (_, index) => {
+    const value = Number(source[index]);
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+    return Math.max(-1, Math.min(1, value));
+  });
 }
 
 function toSimSample(payload, context, motionScale) {
@@ -144,6 +197,9 @@ function toSimSample(payload, context, motionScale) {
   const lonDeg = Number(payload?.lla?.lon_deg);
   const yawDeg = ((yaw * 180) / Math.PI + 360) % 360;
   const headingDeg = firstFinite([payload?.heading_deg, payload?.heading, payload?.yaw_deg], yawDeg);
+  const rawSystemId = Number(payload?.system_id);
+  const systemId = Number.isFinite(rawSystemId) ? Math.trunc(rawSystemId) : null;
+  const actuatorCommands = normalizeActuatorCommands(payload?.u);
 
   const sample = {
     time: (timeUsec - context.firstTimeUsec) / 1e6,
@@ -158,6 +214,8 @@ function toSimSample(payload, context, motionScale) {
     latDeg: Number.isFinite(latDeg) ? latDeg : null,
     lonDeg: Number.isFinite(lonDeg) ? lonDeg : null,
     headingDeg,
+    systemId,
+    u: actuatorCommands,
     flightMode: "Simulator",
     vehicleState: "SITL",
     vehicleType: "Simulator",
@@ -177,8 +235,8 @@ function App() {
   const [error, setError] = useState(null);
   const [ulogName, setUlogName] = useState("");
   const [vehicleInfo, setVehicleInfo] = useState(null);
-  const [modelType, setModelType] = useState("stl");
-  const [modelScale, setModelScale] = useState(1.2);
+  const [modelType, setModelType] = useState(DEFAULT_MODEL_TYPE);
+  const [modelScale, setModelScale] = useState(DEFAULT_MODEL_SCALE);
   const [customStlUrl, setCustomStlUrl] = useState("");
   const [customStlName, setCustomStlName] = useState("");
   const [actuatorSeries, setActuatorSeries] = useState([]);
@@ -198,31 +256,18 @@ function App() {
   const [speed, setSpeed] = useState(1);
   const [loading, setLoading] = useState(false);
 
-  const [simHost, setSimHost] = useState(DEFAULT_SIM_HOST);
-  const [simPort, setSimPort] = useState(DEFAULT_SIM_PORT);
-  const [simSamples, setSimSamples] = useState([]);
-  const [simSample, setSimSample] = useState(null);
-  const [simStatus, setSimStatus] = useState("Disconnected. Set websocket host/port and connect.");
-  const [simError, setSimError] = useState(null);
-  const [simConnecting, setSimConnecting] = useState(false);
-  const [simConnected, setSimConnected] = useState(false);
-  const [simFrameCount, setSimFrameCount] = useState(0);
-  const [simMotionScale, setSimMotionScale] = useState(0.3);
-  const [simSmoothing, setSimSmoothing] = useState(0.55);
+  const [simConnections, setSimConnections] = useState([createSimConnection(1)]);
+  const [simVehiclesBySystemId, setSimVehiclesBySystemId] = useState({});
+  const [simVehicleMeshSettings, setSimVehicleMeshSettings] = useState({});
+  const [selectedSystemId, setSelectedSystemId] = useState(null);
+  const [showInterVehicleLinks, setShowInterVehicleLinks] = useState(false);
+  const [rotateTailsitter90, setRotateTailsitter90] = useState(false);
 
-  const simSocketRef = useRef(null);
-  const simLatestSampleRef = useRef(null);
-  const simPendingSampleRef = useRef(null);
-  const simUiFlushTimerRef = useRef(null);
-  const simMotionScaleRef = useRef(1);
-  const simLastStatusUpdateMsRef = useRef(0);
-  const simFrameCounterRef = useRef(0);
-  const simContextRef = useRef({
-    firstTimeUsec: null,
-    originNed: null,
-    lastScenePosition: null,
-    lastTimeSec: null,
-  });
+  const simSocketsRef = useRef(new Map());
+  const simContextsRef = useRef(new Map());
+  const simConnectionStatsRef = useRef(new Map());
+  const simVehicleMeshSettingsRef = useRef({});
+  const nextSimConnectionIdRef = useRef(2);
 
   const currentSample = useMemo(() => sampleAtTime(samples, time), [samples, time]);
 
@@ -356,6 +401,20 @@ function App() {
     };
   }, [customStlUrl]);
 
+  useEffect(() => {
+    simVehicleMeshSettingsRef.current = simVehicleMeshSettings;
+  }, [simVehicleMeshSettings]);
+
+  useEffect(() => {
+    return () => {
+      for (const settings of Object.values(simVehicleMeshSettingsRef.current)) {
+        if (settings?.customStlUrl) {
+          URL.revokeObjectURL(settings.customStlUrl);
+        }
+      }
+    };
+  }, []);
+
   const handleModelTypeChange = useCallback((nextType) => {
     setModelType(nextType);
   }, []);
@@ -376,6 +435,92 @@ function App() {
     setModelType("upload");
   }, []);
 
+  const handleSelectedSimModelTypeChange = useCallback(
+    (nextType) => {
+      if (selectedSystemId == null) {
+        return;
+      }
+      const key = String(selectedSystemId);
+      setSimVehicleMeshSettings((prev) => {
+        const current = prev[key] ?? createDefaultVehicleMeshSettings();
+        return {
+          ...prev,
+          [key]: {
+            ...current,
+            modelType: nextType,
+          },
+        };
+      });
+    },
+    [selectedSystemId],
+  );
+
+  const handleSelectedSimModelScaleChange = useCallback(
+    (nextScale) => {
+      if (selectedSystemId == null) {
+        return;
+      }
+      const key = String(selectedSystemId);
+      setSimVehicleMeshSettings((prev) => {
+        const current = prev[key] ?? createDefaultVehicleMeshSettings();
+        return {
+          ...prev,
+          [key]: {
+            ...current,
+            modelScale: nextScale,
+          },
+        };
+      });
+    },
+    [selectedSystemId],
+  );
+
+  const handleSelectedSimRotate90Change = useCallback(
+    (nextValue) => {
+      if (selectedSystemId == null) {
+        return;
+      }
+      const key = String(selectedSystemId);
+      setSimVehicleMeshSettings((prev) => {
+        const current = prev[key] ?? createDefaultVehicleMeshSettings();
+        return {
+          ...prev,
+          [key]: {
+            ...current,
+            rotateTailsitter90: nextValue,
+          },
+        };
+      });
+    },
+    [selectedSystemId],
+  );
+
+  const handleSelectedSimCustomStlSelected = useCallback(
+    (file) => {
+      if (!file || selectedSystemId == null) {
+        return;
+      }
+      const key = String(selectedSystemId);
+      const url = URL.createObjectURL(file);
+      setSimVehicleMeshSettings((prev) => {
+        const current = prev[key] ?? createDefaultVehicleMeshSettings();
+        if (current.customStlUrl) {
+          URL.revokeObjectURL(current.customStlUrl);
+        }
+        return {
+          ...prev,
+          [key]: {
+            ...current,
+            modelType: "upload",
+            customStlUrl: url,
+            customStlName: file.name,
+          },
+        };
+      });
+    },
+    [selectedSystemId],
+  );
+
   const handleScrub = useCallback(
     (nextTime) => {
       setTime((prev) => {
@@ -389,166 +534,256 @@ function App() {
     [duration],
   );
 
-  const cancelSimUiFlush = useCallback(() => {
-    if (simUiFlushTimerRef.current != null) {
-      clearTimeout(simUiFlushTimerRef.current);
-      simUiFlushTimerRef.current = null;
-    }
-  }, []);
-
-  const flushPendingSimSample = useCallback(() => {
-    simUiFlushTimerRef.current = null;
-    const sample = simPendingSampleRef.current;
-    if (!sample) {
-      return;
-    }
-
-    simPendingSampleRef.current = null;
-    simLatestSampleRef.current = sample;
-    setSimSample(sample);
-    setSimSamples((prev) => {
-      const next = [...prev, sample];
-      if (next.length > SIM_TRAIL_POINTS) {
-        next.splice(0, next.length - SIM_TRAIL_POINTS);
-      }
-      return next;
+  const clearVehiclesForConnection = useCallback((connectionId) => {
+    setSimVehiclesBySystemId((prev) => {
+      const nextEntries = Object.entries(prev).filter(([, vehicle]) => vehicle.connectionId !== connectionId);
+      return Object.fromEntries(nextEntries);
     });
   }, []);
 
-  const scheduleSimUiFlush = useCallback(() => {
-    if (simUiFlushTimerRef.current != null) {
-      return;
+  const closeSimConnectionSocket = useCallback((connectionId) => {
+    const socket = simSocketsRef.current.get(connectionId);
+    if (socket) {
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      socket.close();
+      simSocketsRef.current.delete(connectionId);
     }
-    simUiFlushTimerRef.current = setTimeout(flushPendingSimSample, SIM_UI_UPDATE_INTERVAL_MS);
-  }, [flushPendingSimSample]);
-
-  const closeSimSocket = useCallback(() => {
-    cancelSimUiFlush();
-    simPendingSampleRef.current = null;
-    const currentSocket = simSocketRef.current;
-    if (currentSocket) {
-      currentSocket.onopen = null;
-      currentSocket.onmessage = null;
-      currentSocket.onerror = null;
-      currentSocket.onclose = null;
-      currentSocket.close();
-      simSocketRef.current = null;
-    }
-  }, [cancelSimUiFlush]);
-
-  const clearSimData = useCallback(() => {
-    simContextRef.current = {
-      firstTimeUsec: null,
-      originNed: null,
-      lastScenePosition: null,
-      lastTimeSec: null,
-    };
-    simFrameCounterRef.current = 0;
-    simLastStatusUpdateMsRef.current = 0;
-    simPendingSampleRef.current = null;
-    setSimFrameCount(0);
-    setSimSample(null);
-    setSimSamples([]);
-    simLatestSampleRef.current = null;
   }, []);
 
-  const clearSimTrail = useCallback(() => {
-    const latestSample = simLatestSampleRef.current;
-    setSimSamples(latestSample ? [latestSample] : []);
+  const setConnectionState = useCallback((connectionId, updater) => {
+    setSimConnections((prev) =>
+      prev.map((connection) => {
+        if (connection.id !== connectionId) {
+          return connection;
+        }
+        return { ...connection, ...updater(connection) };
+      }),
+    );
   }, []);
 
-  const handleSimDisconnect = useCallback(() => {
-    closeSimSocket();
-    setSimConnecting(false);
-    setSimConnected(false);
-    setSimStatus("Disconnected. Set websocket host/port and connect.");
-  }, [closeSimSocket]);
+  const handleSimConnectionFieldChange = useCallback((connectionId, field, value) => {
+    setConnectionState(connectionId, () => ({ [field]: value }));
+  }, [setConnectionState]);
 
-  const handleSimConnect = useCallback(() => {
-    closeSimSocket();
-    clearSimData();
-    setSimError(null);
-    setSimConnecting(true);
-    setSimConnected(false);
+  const handleAddSimConnection = useCallback(() => {
+    const nextId = nextSimConnectionIdRef.current;
+    nextSimConnectionIdRef.current += 1;
+    setSimConnections((prev) => [...prev, createSimConnection(nextId)]);
+  }, []);
 
-    const host = simHost.trim() || DEFAULT_SIM_HOST;
-    const port = normalizeWsPort(simPort);
-    const url = `ws://${host}:${port}`;
-    setSimStatus(`Connecting to ${url} ...`);
+  const handleSimDisconnectConnection = useCallback(
+    (connectionId) => {
+      closeSimConnectionSocket(connectionId);
+      simContextsRef.current.delete(connectionId);
+      simConnectionStatsRef.current.delete(connectionId);
+      clearVehiclesForConnection(connectionId);
+      setConnectionState(connectionId, () => ({
+        connected: false,
+        connecting: false,
+        error: null,
+        status: "Disconnected",
+      }));
+    },
+    [clearVehiclesForConnection, closeSimConnectionSocket, setConnectionState],
+  );
 
-    const socket = new WebSocket(url);
-    let didOpen = false;
-    simSocketRef.current = socket;
+  const handleRemoveSimConnection = useCallback(
+    (connectionId) => {
+      handleSimDisconnectConnection(connectionId);
+      setSimConnections((prev) => prev.filter((connection) => connection.id !== connectionId));
+    },
+    [handleSimDisconnectConnection],
+  );
 
-    socket.onopen = () => {
-      didOpen = true;
-      setSimConnecting(false);
-      setSimConnected(true);
-      setSimStatus(`Connected to ${url}. Waiting for data ...`);
-    };
-
-    socket.onmessage = (event) => {
-      let payload;
-      try {
-        payload = JSON.parse(event.data);
-      } catch {
+  const handleSimConnectConnection = useCallback(
+    (connectionId) => {
+      const connection = simConnections.find((item) => item.id === connectionId);
+      if (!connection) {
         return;
       }
 
-      const sample = toSimSample(payload, simContextRef.current, simMotionScaleRef.current);
-      if (!sample) {
-        return;
-      }
+      closeSimConnectionSocket(connectionId);
+      clearVehiclesForConnection(connectionId);
+      simContextsRef.current.set(connectionId, {
+        firstTimeUsec: null,
+        originNed: null,
+        lastScenePosition: null,
+        lastTimeSec: null,
+      });
+      simConnectionStatsRef.current.set(connectionId, {
+        frameCount: 0,
+        lastStatusUpdateMs: 0,
+      });
 
-      simPendingSampleRef.current = sample;
-      scheduleSimUiFlush();
+      const url = buildWsUrl(connection.host, connection.port);
+      setConnectionState(connectionId, () => ({
+        connecting: true,
+        connected: false,
+        frameCount: 0,
+        error: null,
+        status: `Connecting to ${url} ...`,
+      }));
 
-      simFrameCounterRef.current += 1;
-      const nowMs = performance.now();
-      if (nowMs - simLastStatusUpdateMsRef.current >= 250) {
-        simLastStatusUpdateMsRef.current = nowMs;
-        setSimFrameCount(simFrameCounterRef.current);
-        setSimStatus(`Connected to ${url} - ${simFrameCounterRef.current} frames`);
-      }
-    };
+      const socket = new WebSocket(url);
+      let didOpen = false;
+      simSocketsRef.current.set(connectionId, socket);
 
-    socket.onerror = () => {
-      setSimError("WebSocket connection error");
-    };
+      socket.onopen = () => {
+        didOpen = true;
+        setConnectionState(connectionId, () => ({
+          connecting: false,
+          connected: true,
+          status: `Connected to ${url}. Waiting for data ...`,
+        }));
+      };
 
-    socket.onclose = () => {
-      if (simSocketRef.current === socket) {
-        simSocketRef.current = null;
-      }
-      setSimConnecting(false);
-      setSimConnected(false);
-      if (didOpen) {
-        setSimStatus("Disconnected from simulator websocket.");
-      } else {
-        setSimStatus("Unable to connect. Check host/port and simulator websocket.");
-      }
-    };
-  }, [clearSimData, closeSimSocket, scheduleSimUiFlush, simHost, simPort]);
+      socket.onmessage = (event) => {
+        let payload;
+        try {
+          payload = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+
+        const context = simContextsRef.current.get(connectionId);
+        if (!context) {
+          return;
+        }
+
+        const sample = toSimSample(payload, context, SIM_MOTION_SCALE);
+        if (!sample || !Number.isFinite(sample.systemId)) {
+          return;
+        }
+
+        const systemId = Math.trunc(sample.systemId);
+        setSimVehiclesBySystemId((prev) => {
+          const key = String(systemId);
+          const existing = prev[key];
+          const prevTrail = Array.isArray(existing?.trailSamples) ? existing.trailSamples : [];
+          const nextTrail = [...prevTrail, sample];
+          if (nextTrail.length > SIM_TRAIL_POINTS) {
+            nextTrail.splice(0, nextTrail.length - SIM_TRAIL_POINTS);
+          }
+          return {
+            ...prev,
+            [key]: {
+              systemId,
+              connectionId,
+              latestSample: sample,
+              trailSamples: nextTrail,
+            },
+          };
+        });
+
+        const stats = simConnectionStatsRef.current.get(connectionId) ?? {
+          frameCount: 0,
+          lastStatusUpdateMs: 0,
+        };
+        stats.frameCount += 1;
+        const nowMs = performance.now();
+        if (nowMs - stats.lastStatusUpdateMs >= 250) {
+          stats.lastStatusUpdateMs = nowMs;
+          setConnectionState(connectionId, () => ({
+            frameCount: stats.frameCount,
+            status: `Connected to ${url} - ${stats.frameCount} frames`,
+          }));
+        }
+        simConnectionStatsRef.current.set(connectionId, stats);
+      };
+
+      socket.onerror = () => {
+        setConnectionState(connectionId, () => ({
+          error: "WebSocket connection error",
+        }));
+      };
+
+      socket.onclose = () => {
+        if (simSocketsRef.current.get(connectionId) === socket) {
+          simSocketsRef.current.delete(connectionId);
+        }
+        setConnectionState(connectionId, () => ({
+          connecting: false,
+          connected: false,
+          status: didOpen ? "Disconnected" : "Unable to connect",
+        }));
+        clearVehiclesForConnection(connectionId);
+      };
+    },
+    [clearVehiclesForConnection, closeSimConnectionSocket, setConnectionState, simConnections],
+  );
 
   useEffect(
     () => () => {
-      closeSimSocket();
+      for (const connectionId of simSocketsRef.current.keys()) {
+        closeSimConnectionSocket(connectionId);
+      }
     },
-    [closeSimSocket],
+    [closeSimConnectionSocket],
+  );
+
+  const simVehicleList = useMemo(
+    () =>
+      Object.values(simVehiclesBySystemId)
+        .filter((vehicle) => Number.isFinite(vehicle?.systemId))
+        .sort((a, b) => a.systemId - b.systemId),
+    [simVehiclesBySystemId],
   );
 
   useEffect(() => {
-    simMotionScaleRef.current = simMotionScale;
-  }, [simMotionScale]);
+    if (!simVehicleList.length) {
+      setSelectedSystemId(null);
+      return;
+    }
+    if (selectedSystemId != null && simVehicleList.some((vehicle) => vehicle.systemId === selectedSystemId)) {
+      return;
+    }
+    setSelectedSystemId(simVehicleList[0].systemId);
+  }, [selectedSystemId, simVehicleList]);
 
-  useEffect(() => {
-    simContextRef.current.lastScenePosition = null;
-    simContextRef.current.lastTimeSec = null;
-    clearSimTrail();
-  }, [clearSimTrail, simMotionScale]);
+  const selectedVehicle = useMemo(
+    () => simVehicleList.find((vehicle) => vehicle.systemId === selectedSystemId) ?? null,
+    [selectedSystemId, simVehicleList],
+  );
+  const selectedSimVehicleMesh = useMemo(() => {
+    if (selectedSystemId == null) {
+      return createDefaultVehicleMeshSettings();
+    }
+    return simVehicleMeshSettings[String(selectedSystemId)] ?? createDefaultVehicleMeshSettings();
+  }, [selectedSystemId, simVehicleMeshSettings]);
+  const selectedSimSample = selectedVehicle?.latestSample ?? null;
+  const simDuration = selectedSimSample?.time ?? 0;
+  const simCombinedFrameCount = useMemo(
+    () => simConnections.reduce((sum, connection) => sum + (connection.frameCount || 0), 0),
+    [simConnections],
+  );
+  const simConnectedCount = useMemo(
+    () => simConnections.filter((connection) => connection.connected).length,
+    [simConnections],
+  );
+  const simSummary = useMemo(() => {
+    if (!simConnections.length) {
+      return "No simulator websocket rows configured.";
+    }
+    if (!simConnectedCount) {
+      return "Disconnected. Add websocket rows and connect.";
+    }
+    return `${simConnectedCount}/${simConnections.length} websocket(s) connected - ${simVehicleList.length} vehicle(s)`;
+  }, [simConnectedCount, simConnections.length, simVehicleList.length]);
+  const selectedVehicleUrl = useMemo(() => {
+    if (!selectedVehicle) {
+      return "No vehicle selected";
+    }
+    const source = simConnections.find((connection) => connection.id === selectedVehicle.connectionId);
+    if (!source) {
+      return `System ${selectedVehicle.systemId}`;
+    }
+    return `${buildWsUrl(source.host, source.port)} (sys ${selectedVehicle.systemId})`;
+  }, [selectedVehicle, simConnections]);
 
-  const simDuration = simSample?.time ?? 0;
-  const simUrl = useMemo(() => `ws://${simHost.trim() || DEFAULT_SIM_HOST}:${normalizeWsPort(simPort)}`, [simHost, simPort]);
+  const sceneSample = activeView === "log" ? currentSample : selectedSimSample;
 
   return (
     <div className="app-shell">
@@ -614,18 +849,22 @@ function App() {
           <div className="scene-wrapper">
             <Suspense fallback={null}>
               <FlightScene
-                samples={activeView === "log" ? samples : simSamples}
-                activeSample={activeView === "log" ? currentSample : simSample}
+                samples={samples}
+                activeSample={activeView === "log" ? currentSample : selectedSimSample}
                 modelType={modelType}
                 modelScale={modelScale}
                 customModelUrl={customStlUrl}
                 followCamera={followCamera}
                 simMode={activeView === "sim"}
-                simSmoothing={simSmoothing}
+                rotateTailsitter90={rotateTailsitter90}
+                simVehicles={simVehicleList}
+                simVehicleMeshSettings={simVehicleMeshSettings}
+                selectedSystemId={selectedSystemId}
+                showInterVehicleLinks={showInterVehicleLinks}
               />
             </Suspense>
             {activeView === "log" && !currentSample && <div className="scene-empty-hint">Load a PX4 .ulg to start playback.</div>}
-            {activeView === "sim" && !simSample && (
+            {activeView === "sim" && !selectedSimSample && (
               <div className="scene-empty-hint">Connect to the simulator websocket to start live view.</div>
             )}
             {activeView === "log" && (
@@ -644,17 +883,43 @@ function App() {
                 actuatorLabels={actuatorLabels}
               />
             )}
-            {activeView === "sim" && <SimMapOverlay samples={simSamples} activeSample={simSample} />}
+            {activeView === "sim" && (
+              <SimMapOverlay
+                simVehicles={simVehicleList}
+                selectedSystemId={selectedSystemId}
+                showInterVehicleLinks={showInterVehicleLinks}
+              />
+            )}
+            <div className="scene-center-hud">
+              <div>
+                <span className="label">Speed</span>
+                <strong>{Number.isFinite(sceneSample?.speed) ? `${sceneSample.speed.toFixed(1)} m/s` : "-"}</strong>
+              </div>
+              <div>
+                <span className="label">Altitude</span>
+                <strong>{Number.isFinite(sceneSample?.altitude) ? `${sceneSample.altitude.toFixed(1)} m` : "-"}</strong>
+              </div>
+              <div>
+                <span className="label">Rel Alt</span>
+                <strong>
+                  {Number.isFinite(sceneSample?.altitudeRelative) ? `${sceneSample.altitudeRelative.toFixed(1)} m` : "-"}
+                </strong>
+              </div>
+              <div>
+                <span className="label">Heading</span>
+                <strong>{formatHudHeading(sceneSample)}</strong>
+              </div>
+            </div>
             <div className="overlay-stack">
               <TelemetryOverlay
-                sample={activeView === "log" ? currentSample : simSample}
+                sample={sceneSample}
                 vehicleInfo={vehicleInfo}
-                status={activeView === "log" ? status : simStatus}
-                ulogName={activeView === "log" ? ulogName : simUrl}
-                playing={activeView === "log" ? playing : simConnected}
+                status={activeView === "log" ? status : simSummary}
+                ulogName={activeView === "log" ? ulogName : selectedVehicleUrl}
+                playing={activeView === "log" ? playing : simConnectedCount > 0}
                 speed={activeView === "log" ? speed : 1}
               />
-              <ArtificialHorizon sample={activeView === "log" ? currentSample : simSample} />
+              <ArtificialHorizon sample={activeView === "log" ? currentSample : selectedSimSample} />
             </div>
           </div>
           {activeView === "log" ? (
@@ -675,19 +940,26 @@ function App() {
             <div className="timeline-controls sim-live-controls">
               <div className="timeline-meta">
                 <span>
-                  Live mode. {simFrameCount} frames received, latest at {simDuration.toFixed(2)} s.
+                  Live mode. {simCombinedFrameCount} frames received, selected at {simDuration.toFixed(2)} s.
                 </span>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={followCamera}
-                    onChange={(event) => setFollowCamera(event.target.checked)}
-                  />
-                  Follow camera
-                </label>
-                <button type="button" className="ghost" onClick={clearSimTrail}>
-                  Clear trail
-                </button>
+                <div className="sim-live-toggles">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={followCamera}
+                      onChange={(event) => setFollowCamera(event.target.checked)}
+                    />
+                    Follow camera
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={showInterVehicleLinks}
+                      onChange={(event) => setShowInterVehicleLinks(event.target.checked)}
+                    />
+                    Show blue dotted links
+                  </label>
+                </div>
               </div>
             </div>
           )}
@@ -707,33 +979,31 @@ function App() {
               onModelChange={handleModelTypeChange}
               modelScale={modelScale}
               onModelScaleChange={setModelScale}
+              rotateTailsitter90={rotateTailsitter90}
+              onRotateTailsitter90Change={setRotateTailsitter90}
               onCustomStlSelected={handleCustomStlSelected}
               customStlName={customStlName}
             />
           ) : (
             <SimulatorControls
-              host={simHost}
-              onHostChange={setSimHost}
-              port={simPort}
-              onPortChange={setSimPort}
-              wsUrl={simUrl}
-              connected={simConnected}
-              connecting={simConnecting}
-              onConnect={handleSimConnect}
-              onDisconnect={handleSimDisconnect}
-              onClearTrail={clearSimTrail}
-              status={simStatus}
-              error={simError}
-              motionScale={simMotionScale}
-              onMotionScaleChange={setSimMotionScale}
-              smoothing={simSmoothing}
-              onSmoothingChange={setSimSmoothing}
-              modelType={modelType}
-              onModelChange={handleModelTypeChange}
-              modelScale={modelScale}
-              onModelScaleChange={setModelScale}
-              onCustomStlSelected={handleCustomStlSelected}
-              customStlName={customStlName}
+              connections={simConnections}
+              onConnectionFieldChange={handleSimConnectionFieldChange}
+              onAddConnection={handleAddSimConnection}
+              onRemoveConnection={handleRemoveSimConnection}
+              onConnectConnection={handleSimConnectConnection}
+              onDisconnectConnection={handleSimDisconnectConnection}
+              vehicles={simVehicleList}
+              selectedSystemId={selectedSystemId}
+              onSelectedSystemIdChange={setSelectedSystemId}
+              status={simSummary}
+              modelType={selectedSimVehicleMesh.modelType}
+              onModelChange={handleSelectedSimModelTypeChange}
+              modelScale={selectedSimVehicleMesh.modelScale}
+              onModelScaleChange={handleSelectedSimModelScaleChange}
+              rotateTailsitter90={selectedSimVehicleMesh.rotateTailsitter90}
+              onRotateTailsitter90Change={handleSelectedSimRotate90Change}
+              onCustomStlSelected={handleSelectedSimCustomStlSelected}
+              customStlName={selectedSimVehicleMesh.customStlName}
             />
           )}
         </aside>

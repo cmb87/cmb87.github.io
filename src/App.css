@@ -153,17 +153,54 @@ canvas {
   position: absolute;
   top: 1.25rem;
   left: 1.25rem;
-  width: min(340px, 56vw);
+  width: min(520px, 72vw);
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+.scene-center-hud {
+  position: absolute;
+  left: 50%;
+  top: 1rem;
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, auto));
+  gap: 0.7rem;
+  padding: 0.38rem 0.58rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(125, 211, 252, 0.35);
+  background: rgba(2, 6, 23, 0.72);
+  backdrop-filter: blur(7px);
+  z-index: 8;
+  pointer-events: none;
+}
+
+.scene-center-hud > div {
+  min-width: 96px;
+}
+
+.scene-center-hud .label {
+  display: block;
+  color: #9fb3d9;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.scene-center-hud strong {
+  display: block;
+  margin-top: 0.08rem;
+  color: #f8fafc;
+  font-size: 0.9rem;
+  font-family: "IBM Plex Mono", "Space Grotesk", monospace;
 }
 
 .sim-map-panel {
   background: rgba(2, 6, 23, 0.82);
   border: 1px solid rgba(56, 189, 248, 0.35);
   border-radius: 0.85rem;
-  padding: 0.55rem;
+  padding: 0.6rem;
   backdrop-filter: blur(8px);
   box-shadow: 0 12px 22px rgba(2, 6, 23, 0.55);
 }
@@ -173,7 +210,14 @@ canvas {
   align-items: center;
   justify-content: space-between;
   gap: 0.6rem;
-  margin-bottom: 0.45rem;
+  margin-bottom: 0.5rem;
+}
+
+.sim-map-toolbar .label {
+  color: #9fb3d9;
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
 }
 
 .sim-map-orientation-tabs {
@@ -234,7 +278,7 @@ canvas {
 }
 
 .sim-map-empty {
-  height: 185px;
+  height: 255px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -243,15 +287,21 @@ canvas {
 }
 
 .sim-map-real-wrap {
-  height: 185px;
+  height: 255px;
   border-radius: 0.55rem;
   overflow: hidden;
+  border: 1px solid rgba(56, 189, 248, 0.22);
   transform: rotate(var(--map-rotation, 0deg));
   transform-origin: center center;
   transition: transform 0.2s linear;
 }
 
 .sim-map-real {
+  width: 100%;
+  height: 100%;
+}
+
+.sim-map-real .leaflet-container {
   width: 100%;
   height: 100%;
 }
@@ -267,13 +317,151 @@ canvas {
 }
 
 .sim-map-stats {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.65rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
 }
 
-.sim-map-stats strong {
+.sim-map-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.sim-map-stats-grid-compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.sim-map-stats-grid-pair .sim-map-stat strong {
+  font-size: 0.78rem;
+  letter-spacing: 0.01em;
+}
+
+.sim-map-stat {
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 0.55rem;
+  background: rgba(15, 23, 42, 0.58);
+  padding: 0.48rem 0.52rem;
+}
+
+.sim-map-stat .label {
+  display: block;
+  color: #9fb3d9;
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.22rem;
+}
+
+.sim-map-stat strong {
+  display: block;
+  color: #f1f5f9;
   font-size: 0.86rem;
+  line-height: 1.2;
+}
+
+.sim-map-stat .subvalue {
+  display: block;
+  margin-top: 0.18rem;
+  color: #8cc9ff;
+  font-size: 0.7rem;
+}
+
+.sim-map-stat-primary {
+  background: linear-gradient(165deg, rgba(15, 23, 42, 0.76), rgba(12, 41, 62, 0.66));
+  border-color: rgba(125, 211, 252, 0.34);
+}
+
+.sim-map-stat-primary strong {
+  font-size: 0.93rem;
+}
+
+.sim-map-raw-row {
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 0.55rem;
+  background: rgba(2, 6, 23, 0.48);
+  padding: 0.45rem 0.52rem;
+}
+
+.sim-map-raw-row .label {
+  display: block;
+  color: #9fb3d9;
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.sim-map-raw-row code {
+  display: block;
+  margin-top: 0.2rem;
+  color: #d9f4ff;
+  font-size: 0.74rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sim-trend-header {
+  margin-bottom: 0.45rem;
+}
+
+.sim-trend-canvas {
+  height: 150px;
+}
+
+.sim-trend-canvas .sim-map-empty {
+  height: 100%;
+}
+
+.sim-actuator-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.sim-actuator-row {
+  display: grid;
+  grid-template-columns: 2.2rem 1fr 3.1rem;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.sim-actuator-label {
+  color: #9fb3d9;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+
+.sim-actuator-track {
+  position: relative;
+  height: 0.86rem;
+  border-radius: 999px;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  background: linear-gradient(90deg, rgba(15, 23, 42, 0.88), rgba(12, 74, 42, 0.2), rgba(15, 23, 42, 0.88));
+  overflow: hidden;
+}
+
+.sim-actuator-center {
+  position: absolute;
+  inset: 0 auto 0 50%;
+  width: 1px;
+  background: rgba(148, 163, 184, 0.75);
+  transform: translateX(-0.5px);
+}
+
+.sim-actuator-fill {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #4ade80, #22c55e);
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.45);
+}
+
+.sim-actuator-value {
+  color: #dcfce7;
+  font-size: 0.74rem;
+  text-align: right;
 }
 
 .signal-plot {
@@ -487,6 +675,16 @@ canvas {
   letter-spacing: 0.02em;
 }
 
+.telemetry-grid .telemetry-velocity-value {
+  font-size: 0.84rem;
+  font-family: "IBM Plex Mono", "Space Grotesk", monospace;
+  letter-spacing: 0.01em;
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .telemetry-grid .subvalue {
   display: block;
   font-size: 0.75rem;
@@ -575,8 +773,130 @@ canvas {
 
 .ws-input-grid {
   display: grid;
-  grid-template-columns: 1fr 130px;
+  grid-template-columns: 1fr;
   gap: 0.55rem;
+}
+
+.sim-connection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-height: 340px;
+  overflow-y: auto;
+  padding-right: 0.15rem;
+}
+
+.sim-connection-card {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 0.75rem;
+  padding: 0.55rem 0.62rem;
+  background: rgba(2, 6, 23, 0.45);
+}
+
+.sim-connection-head {
+  margin-bottom: 0.35rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.sim-connection-head strong {
+  color: #e2e8f0;
+  font-size: 0.82rem;
+}
+
+.sim-connection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.45rem;
+}
+
+.sim-connection-actions button {
+  padding: 0.3rem 0.72rem;
+  font-size: 0.72rem;
+}
+
+.sim-connection-inputs {
+  grid-template-columns: 1fr;
+  margin-bottom: 0.25rem;
+}
+
+.sim-connection-actions .ghost.active {
+  border-color: rgba(125, 211, 252, 0.9);
+  background: rgba(56, 189, 248, 0.25);
+}
+
+.sim-endpoint-toggle {
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 0.4rem;
+  padding: 0;
+  font-size: 0.7rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sim-endpoint-toggle-icon {
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.sim-endpoint-toggle.active {
+  border-color: rgba(125, 211, 252, 0.9);
+  background: rgba(56, 189, 248, 0.25);
+}
+
+.sim-live-toggles {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.sim-add-websocket-row {
+  margin-bottom: 0.5rem;
+}
+
+.sim-connection-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.sim-connection-frames {
+  color: #93c5fd;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.sim-connection-status {
+  margin: 0.2rem 0 0;
+  color: #cbd5f5;
+  font-size: 0.78rem;
+}
+
+.sim-vehicle-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.sim-vehicle-chip {
+  padding: 0.24rem 0.62rem;
+  font-size: 0.74rem;
+  border-radius: 999px;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: rgba(30, 64, 175, 0.22);
+}
+
+.sim-vehicle-chip.active {
+  border-color: rgba(125, 211, 252, 0.95);
+  background: rgba(37, 99, 235, 0.45);
 }
 
 .ws-input-grid label {
@@ -625,6 +945,19 @@ canvas {
   accent-color: #38bdf8;
 }
 
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+  font-size: 0.86rem;
+  color: #e2e8f0;
+}
+
+.checkbox-row input[type="checkbox"] {
+  accent-color: #38bdf8;
+}
+
 .file-input {
   display: flex;
   justify-content: space-between;
@@ -642,6 +975,68 @@ canvas {
 .input-meta {
   font-size: 0.85rem;
   color: #cbd5f5;
+}
+
+.ws-info-row {
+  margin-top: 0.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.sim-json-help summary {
+  list-style: none;
+  cursor: pointer;
+  width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 50%;
+  border: 1px solid rgba(125, 211, 252, 0.45);
+  background: rgba(30, 64, 175, 0.28);
+  color: #dbeafe;
+  font-size: 0.74rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+.sim-json-help summary::-webkit-details-marker {
+  display: none;
+}
+
+.sim-json-help {
+  position: relative;
+}
+
+.sim-json-popover {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  width: min(430px, 82vw);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 0.72rem;
+  background: rgba(2, 6, 23, 0.95);
+  box-shadow: 0 12px 25px rgba(2, 6, 23, 0.6);
+  z-index: 15;
+}
+
+.sim-json-title {
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  color: #dbeafe;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+}
+
+.sim-json-popover pre {
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.66rem;
+  line-height: 1.34;
+  color: #bfdbfe;
+  overflow-x: auto;
 }
 
 .control-row {
@@ -890,8 +1285,18 @@ input[type="number"] {
 
   .sim-map-stack {
     position: static;
-    width: min(100%, 380px);
+    width: min(100%, 560px);
     margin-top: 1rem;
+  }
+
+  .scene-center-hud {
+    top: 0.75rem;
+    width: min(96%, 560px);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .scene-center-hud > div {
+    min-width: 0;
   }
 
   .telemetry-overlay,
@@ -918,10 +1323,28 @@ input[type="number"] {
   .sim-map-svg,
   .sim-map-real-wrap,
   .sim-map-empty {
-    height: 160px;
+    height: 210px;
   }
 
-  .sim-map-stats {
+  .sim-map-stats-grid,
+  .sim-map-stats-grid-compact,
+  .sim-map-stats-grid-pair {
     grid-template-columns: 1fr;
+  }
+
+  .sim-actuator-row {
+    grid-template-columns: 2rem 1fr 2.8rem;
+    gap: 0.42rem;
+  }
+
+  .scene-center-hud {
+    top: 0.55rem;
+    gap: 0.45rem;
+    padding: 0.34rem 0.48rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .scene-center-hud strong {
+    font-size: 0.78rem;
   }
 }

@@ -11,6 +11,7 @@ function TelemetryOverlay({ sample, vehicleInfo, status, ulogName, playing, spee
   const flightMode = sample?.flightMode ?? "Unknown";
   const vehicleState = sample?.vehicleState ?? "Unknown";
   const vehicleType = sample?.vehicleType ?? vehicleInfo?.vehicleType ?? "Unknown";
+  const systemId = Number.isFinite(sample?.systemId) ? sample.systemId : null;
   const px4Version = vehicleInfo?.px4Version ?? "Unknown";
 
   return (
@@ -49,6 +50,10 @@ function TelemetryOverlay({ sample, vehicleInfo, status, ulogName, playing, spee
           <strong>{vehicleState}</strong>
         </div>
         <div>
+          <span className="label">System ID</span>
+          <strong>{systemId != null ? systemId : "—"}</strong>
+        </div>
+        <div>
           <span className="label">Vehicle type</span>
           <strong>{vehicleType}</strong>
         </div>
@@ -70,7 +75,7 @@ function TelemetryOverlay({ sample, vehicleInfo, status, ulogName, playing, spee
         </div>
         <div>
           <span className="label">Velocity (E/U/-N)</span>
-          <strong>
+          <strong className="telemetry-velocity-value">
             {velocity
               ? `${velocity[0].toFixed(1)}, ${velocity[1].toFixed(1)}, ${velocity[2].toFixed(1)} m/s`
               : "—"}
