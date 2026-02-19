@@ -174,20 +174,20 @@ function toSimSample(payload, context, motionScale) {
     absoluteNed[1] - context.originNed[1],
     absoluteNed[2] - context.originNed[2],
   ];
-  const scenePositionUnscaled = toSceneVector(relativeNed);
-  const scenePosition = [
-    scenePositionUnscaled[0] * motionScale,
-    scenePositionUnscaled[1] * motionScale,
-    scenePositionUnscaled[2] * motionScale,
+  const scenePosition = toSceneVector(relativeNed);
+  const displayPosition = [
+    scenePosition[0] * motionScale,
+    scenePosition[1] * motionScale,
+    scenePosition[2] * motionScale,
   ];
 
-  let sceneVelocity = [0, 0, 0];
+  let velocity = [0, 0, 0];
   const dt = context.lastTimeSec != null ? timeUsec * 1e-6 - context.lastTimeSec : 0;
-  if (context.lastScenePosition && dt > 1e-6) {
-    sceneVelocity = [
-      (scenePosition[0] - context.lastScenePosition[0]) / dt,
-      (scenePosition[1] - context.lastScenePosition[1]) / dt,
-      (scenePosition[2] - context.lastScenePosition[2]) / dt,
+  if (context.lastPosition && dt > 1e-6) {
+    velocity = [
+      (scenePosition[0] - context.lastPosition[0]) / dt,
+      (scenePosition[1] - context.lastPosition[1]) / dt,
+      (scenePosition[2] - context.lastPosition[2]) / dt,
     ];
   }
 
@@ -206,11 +206,12 @@ function toSimSample(payload, context, motionScale) {
     quaternion: [renderQuat.x, renderQuat.y, renderQuat.z, renderQuat.w],
     telemetryQuaternion: [telemetryQuat.x, telemetryQuat.y, telemetryQuat.z, telemetryQuat.w],
     position: scenePosition,
-    velocity: sceneVelocity,
+    displayPosition,
+    velocity,
     altitude: Number.isFinite(altitudeAmsl) ? altitudeAmsl : altitudeRelative,
     altitudeRelative,
     euler: [roll, pitch, yaw],
-    speed: Math.hypot(...sceneVelocity),
+    speed: Math.hypot(...velocity),
     latDeg: Number.isFinite(latDeg) ? latDeg : null,
     lonDeg: Number.isFinite(lonDeg) ? lonDeg : null,
     headingDeg,
@@ -221,7 +222,7 @@ function toSimSample(payload, context, motionScale) {
     vehicleType: "Simulator",
   };
 
-  context.lastScenePosition = scenePosition;
+  context.lastPosition = scenePosition;
   context.lastTimeSec = timeUsec * 1e-6;
 
   return sample;
@@ -616,7 +617,7 @@ function App() {
       simContextsRef.current.set(connectionId, {
         firstTimeUsec: null,
         originNed: null,
-        lastScenePosition: null,
+        lastPosition: null,
         lastTimeSec: null,
       });
       simConnectionStatsRef.current.set(connectionId, {

@@ -14,6 +14,14 @@ const PATH_ELEVATION = 0.08;
 const MIN_PATH_POINT_SEPARATION_SQ = 0.0004;
 const MAX_PATH_POINTS = 12000;
 
+function getDisplayPosition(sample) {
+  const display = sample?.displayPosition;
+  if (Array.isArray(display) && display.length >= 3 && display.every((value) => Number.isFinite(value))) {
+    return display;
+  }
+  return sample?.position;
+}
+
 function toRad(value) {
   return (value * Math.PI) / 180;
 }
@@ -56,7 +64,11 @@ function StlVehicle({ sample, stlPath, modelScale, simMode, simLerpAlpha, simSle
     if (!meshRef.current || !current) {
       return;
     }
-    targetPos.set(current.position[0], current.position[1], current.position[2]);
+    const displayPosition = getDisplayPosition(current);
+    if (!displayPosition) {
+      return;
+    }
+    targetPos.set(displayPosition[0], displayPosition[1], displayPosition[2]);
     sampleQuat.set(
       current.quaternion[0],
       current.quaternion[1],
@@ -116,7 +128,11 @@ function DummyVehicle({ sample, simMode, simLerpAlpha, simSlerpAlpha, enableShad
     if (!groupRef.current || !current) {
       return;
     }
-    targetPos.set(current.position[0], current.position[1], current.position[2]);
+    const displayPosition = getDisplayPosition(current);
+    if (!displayPosition) {
+      return;
+    }
+    targetPos.set(displayPosition[0], displayPosition[1], displayPosition[2]);
     sampleQuat.set(
       current.quaternion[0],
       current.quaternion[1],
@@ -163,9 +179,10 @@ function FlightPath({ samples }) {
     const points = [];
 
     for (const sample of samples) {
-      const x = sample?.position?.[0];
-      const y = sample?.position?.[1];
-      const z = sample?.position?.[2];
+      const position = getDisplayPosition(sample);
+      const x = position?.[0];
+      const y = position?.[1];
+      const z = position?.[2];
 
       if (![x, y, z].every(Number.isFinite)) {
         continue;
@@ -229,7 +246,7 @@ function InterVehicleLinks({ simVehicles, show, maxDistanceMeters = null }) {
     const positions = simVehicles
       .map((vehicle) => ({
         systemId: vehicle.systemId,
-        position: vehicle?.latestSample?.position,
+        position: getDisplayPosition(vehicle?.latestSample),
         latestSample: vehicle?.latestSample,
       }))
       .filter(({ position }) =>
@@ -309,7 +326,11 @@ function CameraFollower({ activeSample, followCamera, controlsRef, targetKey = n
     if (!followCamera || !sample) {
       return;
     }
-    targetPos.set(sample.position[0], sample.position[1], sample.position[2]);
+    const displayPosition = getDisplayPosition(sample);
+    if (!displayPosition) {
+      return;
+    }
+    targetPos.set(displayPosition[0], displayPosition[1], displayPosition[2]);
     desiredPos.copy(targetPos).add(offsetRef.current);
     camera.position.copy(desiredPos);
     const controls = controlsRef.current;
@@ -350,7 +371,11 @@ function CameraFollower({ activeSample, followCamera, controlsRef, targetKey = n
       return;
     }
 
-    targetPos.set(activeSample.position[0], activeSample.position[1], activeSample.position[2]);
+    const displayPosition = getDisplayPosition(activeSample);
+    if (!displayPosition) {
+      return;
+    }
+    targetPos.set(displayPosition[0], displayPosition[1], displayPosition[2]);
     const controls = controlsRef.current;
     if (!wasFollowingRef.current) {
       if (controls) {
