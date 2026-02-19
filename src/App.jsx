@@ -249,6 +249,7 @@ function App() {
   const [eventSeries, setEventSeries] = useState([]);
   const [failsafeTransitions, setFailsafeTransitions] = useState([]);
   const [actuatorLabels, setActuatorLabels] = useState(DEFAULT_ACTUATOR_LABELS);
+  const [showActuatorLabels, setShowActuatorLabels] = useState(false);
 
   const [playing, setPlaying] = useState(false);
   const [followCamera, setFollowCamera] = useState(false);
@@ -261,6 +262,7 @@ function App() {
   const [simVehicleMeshSettings, setSimVehicleMeshSettings] = useState({});
   const [selectedSystemId, setSelectedSystemId] = useState(null);
   const [showInterVehicleLinks, setShowInterVehicleLinks] = useState(false);
+  const [simMaxDistanceMeters, setSimMaxDistanceMeters] = useState("");
   const [rotateTailsitter90, setRotateTailsitter90] = useState(false);
 
   const simSocketsRef = useRef(new Map());
@@ -571,7 +573,11 @@ function App() {
   const handleAddSimConnection = useCallback(() => {
     const nextId = nextSimConnectionIdRef.current;
     nextSimConnectionIdRef.current += 1;
-    setSimConnections((prev) => [...prev, createSimConnection(nextId)]);
+    setSimConnections((prev) => {
+      const lastPort = prev.length ? prev[prev.length - 1].port : DEFAULT_SIM_PORT;
+      const incrementedPort = Math.min(65535, normalizeWsPort(lastPort) + 1);
+      return [...prev, createSimConnection(nextId, DEFAULT_SIM_HOST, String(incrementedPort))];
+    });
   }, []);
 
   const handleSimDisconnectConnection = useCallback(
@@ -755,6 +761,10 @@ function App() {
   }, [selectedSystemId, simVehicleMeshSettings]);
   const selectedSimSample = selectedVehicle?.latestSample ?? null;
   const simDuration = selectedSimSample?.time ?? 0;
+  const simMaxDistanceThreshold = useMemo(() => {
+    const parsed = Number(simMaxDistanceMeters);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }, [simMaxDistanceMeters]);
   const simCombinedFrameCount = useMemo(
     () => simConnections.reduce((sum, connection) => sum + (connection.frameCount || 0), 0),
     [simConnections],
@@ -816,31 +826,44 @@ function App() {
 
       {activeView === "log" && (
         <section className="channel-map-bar">
-          <h3>Actuator Channel Labels</h3>
-          <div className="channel-map-grid">
-            {actuatorLabels.map((label, index) => (
-              <label key={`act-${index}`}>
-                <span>A{index + 1}</span>
-                <select
-                  value={label}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setActuatorLabels((prev) => {
-                      const next = [...prev];
-                      next[index] = value;
-                      return next;
-                    });
-                  }}
-                >
-                  {ACTUATOR_LABEL_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ))}
+          <div className="channel-map-header">
+            <h3>Actuator Channel Labels</h3>
+            <button
+              type="button"
+              className="channel-map-toggle"
+              onClick={() => setShowActuatorLabels((prev) => !prev)}
+              aria-expanded={showActuatorLabels}
+              aria-label={showActuatorLabels ? "Hide actuator labels" : "Show actuator labels"}
+            >
+              ☰
+            </button>
           </div>
+          {showActuatorLabels && (
+            <div className="channel-map-grid">
+              {actuatorLabels.map((label, index) => (
+                <label key={`act-${index}`}>
+                  <span>A{index + 1}</span>
+                  <select
+                    value={label}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setActuatorLabels((prev) => {
+                        const next = [...prev];
+                        next[index] = value;
+                        return next;
+                      });
+                    }}
+                  >
+                    {ACTUATOR_LABEL_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </div>
+          )}
         </section>
       )}
 
@@ -861,6 +884,7 @@ function App() {
                 simVehicleMeshSettings={simVehicleMeshSettings}
                 selectedSystemId={selectedSystemId}
                 showInterVehicleLinks={showInterVehicleLinks}
+                maxInterVehicleDistanceMeters={simMaxDistanceThreshold}
               />
             </Suspense>
             {activeView === "log" && !currentSample && <div className="scene-empty-hint">Load a PX4 .ulg to start playback.</div>}
@@ -888,6 +912,9 @@ function App() {
                 simVehicles={simVehicleList}
                 selectedSystemId={selectedSystemId}
                 showInterVehicleLinks={showInterVehicleLinks}
+                maxDistanceMeters={simMaxDistanceThreshold}
+                maxDistanceInput={simMaxDistanceMeters}
+                onMaxDistanceInputChange={setSimMaxDistanceMeters}
               />
             )}
             <div className="scene-center-hud">

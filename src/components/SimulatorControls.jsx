@@ -116,14 +116,6 @@ function SimulatorControls({
                         {connection.connecting ? "Connecting..." : "Connect"}
                       </button>
                     )}
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={() => onRemoveConnection(connection.id)}
-                      disabled={connections.length <= 1}
-                    >
-                      Remove
-                    </button>
                 </div>
 
                 {showInputs && (
@@ -154,12 +146,24 @@ function SimulatorControls({
                 )}
 
                 <div className="sim-connection-meta">
-                  <div className="input-meta">{wsUrl}</div>
-                  <span className="sim-connection-frames">
-                    {connection.frameCount} frames{connectionVehicleIds.length ? ` - SYS ${connectionVehicleIds.join(", ")}` : ""}
-                  </span>
+                  <div className="sim-connection-details">
+                    <div className="input-meta">{wsUrl}</div>
+                    <span className="sim-connection-frames">
+                      {connection.frameCount} frames{connectionVehicleIds.length ? ` - SYS ${connectionVehicleIds.join(", ")}` : ""}
+                    </span>
+                    <p className="sim-connection-status">{connection.status}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="ghost sim-connection-remove"
+                    onClick={() => onRemoveConnection(connection.id)}
+                    disabled={connections.length <= 1}
+                    title="Remove connection"
+                    aria-label="Remove connection"
+                  >
+                    <span aria-hidden="true">✕</span>
+                  </button>
                 </div>
-                <p className="sim-connection-status">{connection.status}</p>
                 {connection.error && <p className="error-line">{connection.error}</p>}
               </div>
             );

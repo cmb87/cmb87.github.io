@@ -14,6 +14,22 @@ const PATH_ELEVATION = 0.08;
 const MIN_PATH_POINT_SEPARATION_SQ = 0.0004;
 const MAX_PATH_POINTS = 12000;
 
+function toRad(value) {
+  return (value * Math.PI) / 180;
+}
+
+function haversineMeters(aLat, aLon, bLat, bLon) {
+  const earthRadius = 6371000;
+  const dLat = toRad(bLat - aLat);
+  const dLon = toRad(bLon - aLon);
+  const lat1 = toRad(aLat);
+  const lat2 = toRad(bLat);
+  const sinLat = Math.sin(dLat / 2);
+  const sinLon = Math.sin(dLon / 2);
+  const h = sinLat * sinLat + Math.cos(lat1) * Math.cos(lat2) * sinLon * sinLon;
+  return 2 * earthRadius * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
 function StlVehicle({ sample, stlPath, modelScale, simMode, simLerpAlpha, simSlerpAlpha, rotateMesh90, enableShadows }) {
   const geometry = useLoader(STLLoader, stlPath);
   const meshRef = useRef();
@@ -204,15 +220,17 @@ function FlightPath({ samples }) {
   );
 }
 
-function InterVehicleLinks({ simVehicles, show }) {
+function InterVehicleLinks({ simVehicles, show, maxDistanceMeters = null }) {
   const links = useMemo(() => {
     if (!show) {
       return [];
     }
+    const thresholdActive = Number.isFinite(maxDistanceMeters) && maxDistanceMeters > 0;
     const positions = simVehicles
       .map((vehicle) => ({
         systemId: vehicle.systemId,
         position: vehicle?.latestSample?.position,
+        latestSample: vehicle?.latestSample,
       }))
       .filter(({ position }) =>
         Array.isArray(position) && position.length >= 3 && position.every((value) => Number.isFinite(value)),
@@ -221,14 +239,34 @@ function InterVehicleLinks({ simVehicles, show }) {
     const pairs = [];
     for (let i = 0; i < positions.length; i += 1) {
       for (let j = i + 1; j < positions.length; j += 1) {
+        const aSample = positions[i].latestSample;
+        const bSample = positions[j].latestSample;
+        let exceedsMaxDistance = false;
+
+        if (thresholdActive) {
+          const aLat = Number(aSample?.latDeg);
+          const aLon = Number(aSample?.lonDeg);
+          const bLat = Number(bSample?.latDeg);
+          const bLon = Number(bSample?.lonDeg);
+          if ([aLat, aLon, bLat, bLon].every(Number.isFinite)) {
+            const horizontal = haversineMeters(aLat, aLon, bLat, bLon);
+            const aAlt = Number(aSample?.altitude);
+            const bAlt = Number(bSample?.altitude);
+            const vertical = Number.isFinite(aAlt) && Number.isFinite(bAlt) ? Math.abs(aAlt - bAlt) : 0;
+            const total = Math.hypot(horizontal, vertical);
+            exceedsMaxDistance = total > maxDistanceMeters;
+          }
+        }
+
         pairs.push({
           key: `${positions[i].systemId}-${positions[j].systemId}`,
           points: [positions[i].position, positions[j].position],
+          exceedsMaxDistance,
         });
       }
     }
     return pairs;
-  }, [show, simVehicles]);
+  }, [maxDistanceMeters, show, simVehicles]);
 
   if (!links.length) {
     return null;
@@ -238,7 +276,7 @@ function InterVehicleLinks({ simVehicles, show }) {
     <Line
       key={link.key}
       points={link.points}
-      color="#60a5fa"
+      color={link.exceedsMaxDistance ? "#ef4444" : "#60a5fa"}
       lineWidth={1.6}
       opacity={0.9}
       transparent
@@ -365,6 +403,7 @@ export default function FlightScene({
   simVehicleMeshSettings = {},
   selectedSystemId = null,
   showInterVehicleLinks = false,
+  maxInterVehicleDistanceMeters = null,
 }) {
   const stlPath = modelType === "upload" && customModelUrl ? customModelUrl : DEFAULT_STL;
   const controlsRef = useRef();
@@ -398,7 +437,13 @@ export default function FlightScene({
       </mesh>
       <axesHelper args={[12]} />
       {!simMode && <FlightPath samples={samples} />}
-      {simMode && <InterVehicleLinks simVehicles={simVehicles} show={showInterVehicleLinks} />}
+      {simMode && (
+        <InterVehicleLinks
+          simVehicles={simVehicles}
+          show={showInterVehicleLinks}
+          maxDistanceMeters={maxInterVehicleDistanceMeters}
+        />
+      )}
       <CameraFollower
         activeSample={simMode ? selectedSimSample : activeSample}
         followCamera={followCamera}

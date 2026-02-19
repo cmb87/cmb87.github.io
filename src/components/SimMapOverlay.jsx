@@ -14,6 +14,22 @@ const ACTUATOR_COUNT = 8;
 const TRIANGLE_FRONT_METERS = 20;
 const TRIANGLE_REAR_METERS = 14;
 
+function toRad(value) {
+  return (value * Math.PI) / 180;
+}
+
+function haversineMeters(aLat, aLon, bLat, bLon) {
+  const earthRadius = 6371000;
+  const dLat = toRad(bLat - aLat);
+  const dLon = toRad(bLon - aLon);
+  const lat1 = toRad(aLat);
+  const lat2 = toRad(bLat);
+  const sinLat = Math.sin(dLat / 2);
+  const sinLon = Math.sin(dLon / 2);
+  const h = sinLat * sinLat + Math.cos(lat1) * Math.cos(lat2) * sinLon * sinLon;
+  return 2 * earthRadius * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
 function formatCoord(value, digits = 6) {
   return Number.isFinite(value) ? value.toFixed(digits) : "-";
 }
@@ -144,7 +160,14 @@ function MapViewportController({ currentGeo }) {
   return null;
 }
 
-function SimMapOverlay({ simVehicles, selectedSystemId, showInterVehicleLinks }) {
+function SimMapOverlay({
+  simVehicles,
+  selectedSystemId,
+  showInterVehicleLinks,
+  maxDistanceMeters = null,
+  maxDistanceInput = "",
+  onMaxDistanceInputChange,
+}) {
   const [activeTab, setActiveTab] = useState("map");
   const [visibleTrend, setVisibleTrend] = useState(new Set());
 
@@ -168,10 +191,37 @@ function SimMapOverlay({ simVehicles, selectedSystemId, showInterVehicleLinks })
         .map((vehicle) => ({
           systemId: vehicle.systemId,
           geo: [vehicle.latest.latDeg, vehicle.latest.lonDeg],
+          latest: vehicle.latest,
           headingDeg: vehicle.latest.headingDeg,
         })),
     [simVehicles],
   );
+
+  const interVehicleDistances = useMemo(() => {
+    const thresholdActive = Number.isFinite(maxDistanceMeters) && maxDistanceMeters > 0;
+    const pairs = [];
+    for (let i = 0; i < allVehicleGeos.length; i += 1) {
+      for (let j = i + 1; j < allVehicleGeos.length; j += 1) {
+        const a = allVehicleGeos[i];
+        const b = allVehicleGeos[j];
+        const horizontal = haversineMeters(a.geo[0], a.geo[1], b.geo[0], b.geo[1]);
+        const aAlt = Number(a.latest?.altitude);
+        const bAlt = Number(b.latest?.altitude);
+        const vertical = Number.isFinite(aAlt) && Number.isFinite(bAlt) ? Math.abs(aAlt - bAlt) : null;
+        const total = Number.isFinite(vertical) ? Math.hypot(horizontal, vertical) : horizontal;
+        pairs.push({
+          key: `${a.systemId}-${b.systemId}`,
+          fromSystemId: a.systemId,
+          toSystemId: b.systemId,
+          horizontal,
+          vertical,
+          total,
+          exceedsMaxDistance: thresholdActive && total > maxDistanceMeters,
+        });
+      }
+    }
+    return pairs.sort((a, b) => a.total - b.total);
+  }, [allVehicleGeos, maxDistanceMeters]);
 
   const selectedGeoSamples = useMemo(
     () => selectedSamples.filter((item) => Number.isFinite(item?.latDeg) && Number.isFinite(item?.lonDeg)),
@@ -213,17 +263,26 @@ function SimMapOverlay({ simVehicles, selectedSystemId, showInterVehicleLinks })
     if (!showInterVehicleLinks) {
       return [];
     }
-    const links = [];
-    for (let i = 0; i < allVehicleGeos.length; i += 1) {
-      for (let j = i + 1; j < allVehicleGeos.length; j += 1) {
-        links.push({
-          key: `${allVehicleGeos[i].systemId}-${allVehicleGeos[j].systemId}`,
-          positions: [allVehicleGeos[i].geo, allVehicleGeos[j].geo],
-        });
-      }
-    }
-    return links;
-  }, [allVehicleGeos, showInterVehicleLinks]);
+    const geoBySystemId = allVehicleGeos.reduce((acc, vehicle) => {
+      acc.set(vehicle.systemId, vehicle.geo);
+      return acc;
+    }, new Map());
+
+    return interVehicleDistances
+      .map((item) => {
+        const fromGeo = geoBySystemId.get(item.fromSystemId);
+        const toGeo = geoBySystemId.get(item.toSystemId);
+        if (!fromGeo || !toGeo) {
+          return null;
+        }
+        return {
+          key: item.key,
+          positions: [fromGeo, toGeo],
+          exceedsMaxDistance: item.exceedsMaxDistance,
+        };
+      })
+      .filter(Boolean);
+  }, [allVehicleGeos, interVehicleDistances, showInterVehicleLinks]);
 
   const actuatorValues = useMemo(() => {
     const source = Array.isArray(selectedSample?.u) ? selectedSample.u : [];
@@ -294,6 +353,13 @@ function SimMapOverlay({ simVehicles, selectedSystemId, showInterVehicleLinks })
         </button>
         <button
           type="button"
+          className={`signal-tab ${activeTab === "distance" ? "active" : ""}`}
+          onClick={() => setActiveTab("distance")}
+        >
+          Distances
+        </button>
+        <button
+          type="button"
           className={`signal-tab ${activeTab === "trend" ? "active" : ""}`}
           onClick={() => setActiveTab("trend")}
         >
@@ -360,7 +426,12 @@ function SimMapOverlay({ simVehicles, selectedSystemId, showInterVehicleLinks })
                   <Polyline
                     key={`link-${link.key}`}
                     positions={link.positions}
-                    pathOptions={{ color: "#3b82f6", weight: 2, opacity: 0.9, dashArray: "6, 6" }}
+                    pathOptions={{
+                      color: link.exceedsMaxDistance ? "#ef4444" : "#3b82f6",
+                      weight: 2,
+                      opacity: 0.9,
+                      dashArray: "6, 6",
+                    }}
                   />
                 ))}
                 {allVehicleGeos.map((vehicle) => {
@@ -474,6 +545,44 @@ function SimMapOverlay({ simVehicles, selectedSystemId, showInterVehicleLinks })
                 </code>
               </div>
             </>
+          )}
+        </div>
+      )}
+
+      {activeTab === "distance" && (
+        <div className="sim-map-panel sim-distance-panel">
+          <div className="signal-header sim-trend-header">
+            <span>Physical distance between vehicles</span>
+            <small>{interVehicleDistances.length} pair(s)</small>
+          </div>
+          <div className="sim-distance-threshold-row">
+            <label htmlFor="sim-max-distance-input">Max distance (m)</label>
+            <input
+              id="sim-max-distance-input"
+              type="number"
+              min="0"
+              step="0.1"
+              value={maxDistanceInput}
+              placeholder="off"
+              onChange={(event) => onMaxDistanceInputChange?.(event.target.value)}
+            />
+            <small>{Number.isFinite(maxDistanceMeters) ? `Active at ${maxDistanceMeters.toFixed(1)} m` : "Disabled"}</small>
+          </div>
+          {!interVehicleDistances.length ? (
+            <div className="sim-map-empty">Need at least 2 vehicles with valid GPS to compute distances.</div>
+          ) : (
+            <div className="sim-distance-list">
+              {interVehicleDistances.map((item) => (
+                <div key={item.key} className={`sim-distance-row ${item.exceedsMaxDistance ? "exceeded" : ""}`}>
+                  <strong>{`SYS ${item.fromSystemId} <-> SYS ${item.toSystemId}`}</strong>
+                  <span>{item.total.toFixed(1)} m</span>
+                  <small>
+                    H {item.horizontal.toFixed(1)} m
+                    {Number.isFinite(item.vertical) ? ` · V ${item.vertical.toFixed(1)} m` : ""}
+                  </small>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}
