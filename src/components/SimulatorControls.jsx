@@ -32,6 +32,8 @@ function SimulatorControls({
   onModelScaleChange,
   rotateTailsitter90,
   onRotateTailsitter90Change,
+  tailsitterPitchCorrection,
+  onTailsitterPitchCorrectionChange,
   onCustomStlSelected,
   customStlName,
 }) {
@@ -278,15 +280,27 @@ function SimulatorControls({
           />
           <strong>{modelScale.toFixed(2)}x</strong>
         </label>
-        {modelType !== "dummy" && hasSelectedVehicle && (
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={rotateTailsitter90}
-              onChange={(event) => onRotateTailsitter90Change(event.target.checked)}
-            />
-            Rotate STL mesh by 90 deg pitch
-          </label>
+        {hasSelectedVehicle && (
+          <>
+            {modelType !== "dummy" && (
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={rotateTailsitter90}
+                  onChange={(event) => onRotateTailsitter90Change(event.target.checked)}
+                />
+                Rotate STL mesh by 90 deg pitch
+              </label>
+            )}
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={tailsitterPitchCorrection}
+                onChange={(event) => onTailsitterPitchCorrectionChange(event.target.checked)}
+              />
+              Tailsitter pitch correction
+            </label>
+          </>
         )}
       </div>
 

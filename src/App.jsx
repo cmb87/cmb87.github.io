@@ -1,5 +1,5 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Matrix4, Quaternion } from "three";
+import { Euler, Matrix4, Quaternion } from "three";
 import FlightScene from "./components/FlightScene";
 import FileControls from "./components/FileControls";
 import SimulatorControls from "./components/SimulatorControls";
@@ -59,6 +59,7 @@ const NED_TO_SCENE_QUAT = new Quaternion().setFromRotationMatrix(
     1,
   ),
 );
+const SIM_TAILSITTER_PITCH_CORRECTION_QUAT = new Quaternion().setFromEuler(new Euler(0, -Math.PI / 2, 0, "XYZ"));
 
 function createSimConnection(id, host = DEFAULT_SIM_HOST, port = DEFAULT_SIM_PORT) {
   return {
@@ -78,6 +79,7 @@ function createDefaultVehicleMeshSettings() {
     modelType: DEFAULT_MODEL_TYPE,
     modelScale: DEFAULT_MODEL_SCALE,
     rotateTailsitter90: false,
+    tailsitterPitchCorrection: false,
     customStlUrl: "",
     customStlName: "",
   };
@@ -133,7 +135,7 @@ function normalizeActuatorCommands(values) {
   });
 }
 
-function toSimSample(payload, context, motionScale) {
+function toSimSample(payload, context, motionScale, tailsitterPitchCorrection = false) {
   const timeUsec = Number(payload?.time_usec);
   const positionNed = payload?.position_ned_m;
   const quaternionWxyz = payload?.quaternion_wxyz;
@@ -152,17 +154,17 @@ function toSimSample(payload, context, motionScale) {
     Number(quaternionWxyz[3]) || 0,
     Number(quaternionWxyz[0]) || 1,
   ).normalize();
+  const displayTelemetryQuat = tailsitterPitchCorrection
+    ? telemetryQuat.clone().multiply(SIM_TAILSITTER_PITCH_CORRECTION_QUAT)
+    : telemetryQuat;
+  const displayEuler = new Euler().setFromQuaternion(displayTelemetryQuat, "XYZ");
+  const roll = displayEuler.x;
+  const pitch = displayEuler.y;
+  const yaw = displayEuler.z;
+  const rawEuler = new Euler().setFromQuaternion(telemetryQuat, "XYZ");
+  const rawYaw = rawEuler.z;
+
   const renderQuat = NED_TO_SCENE_QUAT.clone().multiply(telemetryQuat);
-  const sinrCosp = 2 * (telemetryQuat.w * telemetryQuat.x + telemetryQuat.y * telemetryQuat.z);
-  const cosrCosp = 1 - 2 * (telemetryQuat.x * telemetryQuat.x + telemetryQuat.y * telemetryQuat.y);
-  const roll = Math.atan2(sinrCosp, cosrCosp);
-
-  const sinp = 2 * (telemetryQuat.w * telemetryQuat.y - telemetryQuat.z * telemetryQuat.x);
-  const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * (Math.PI / 2) : Math.asin(sinp);
-
-  const sinyCosp = 2 * (telemetryQuat.w * telemetryQuat.z + telemetryQuat.x * telemetryQuat.y);
-  const cosyCosp = 1 - 2 * (telemetryQuat.y * telemetryQuat.y + telemetryQuat.z * telemetryQuat.z);
-  const yaw = Math.atan2(sinyCosp, cosyCosp);
 
   const absoluteNed = [Number(positionNed[0]) || 0, Number(positionNed[1]) || 0, Number(positionNed[2]) || 0];
   if (context.originNed == null) {
@@ -195,7 +197,7 @@ function toSimSample(payload, context, motionScale) {
   const altitudeAmsl = Number(payload?.lla?.alt_m);
   const latDeg = Number(payload?.lla?.lat_deg);
   const lonDeg = Number(payload?.lla?.lon_deg);
-  const yawDeg = ((yaw * 180) / Math.PI + 360) % 360;
+  const yawDeg = ((rawYaw * 180) / Math.PI + 360) % 360;
   const headingDeg = firstFinite([payload?.heading_deg, payload?.heading, payload?.yaw_deg], yawDeg);
   const rawSystemId = Number(payload?.system_id);
   const systemId = Number.isFinite(rawSystemId) ? Math.trunc(rawSystemId) : null;
@@ -498,6 +500,26 @@ function App() {
     [selectedSystemId],
   );
 
+  const handleSelectedSimPitchCorrectionChange = useCallback(
+    (nextValue) => {
+      if (selectedSystemId == null) {
+        return;
+      }
+      const key = String(selectedSystemId);
+      setSimVehicleMeshSettings((prev) => {
+        const current = prev[key] ?? createDefaultVehicleMeshSettings();
+        return {
+          ...prev,
+          [key]: {
+            ...current,
+            tailsitterPitchCorrection: nextValue,
+          },
+        };
+      });
+    },
+    [selectedSystemId],
+  );
+
   const handleSelectedSimCustomStlSelected = useCallback(
     (file) => {
       if (!file || selectedSystemId == null) {
@@ -660,7 +682,11 @@ function App() {
           return;
         }
 
-        const sample = toSimSample(payload, context, SIM_MOTION_SCALE);
+        const incomingSystemId = Number(payload?.system_id);
+        const parsedSystemId = Number.isFinite(incomingSystemId) ? Math.trunc(incomingSystemId) : null;
+        const meshSettings = parsedSystemId == null ? null : simVehicleMeshSettingsRef.current[String(parsedSystemId)];
+        const tailSitterPitchCorrectionEnabled = Boolean(meshSettings?.tailsitterPitchCorrection);
+        const sample = toSimSample(payload, context, SIM_MOTION_SCALE, tailSitterPitchCorrectionEnabled);
         if (!sample || !Number.isFinite(sample.systemId)) {
           return;
         }
@@ -1030,6 +1056,8 @@ function App() {
               onModelScaleChange={handleSelectedSimModelScaleChange}
               rotateTailsitter90={selectedSimVehicleMesh.rotateTailsitter90}
               onRotateTailsitter90Change={handleSelectedSimRotate90Change}
+              tailsitterPitchCorrection={selectedSimVehicleMesh.tailsitterPitchCorrection}
+              onTailsitterPitchCorrectionChange={handleSelectedSimPitchCorrectionChange}
               onCustomStlSelected={handleSelectedSimCustomStlSelected}
               customStlName={selectedSimVehicleMesh.customStlName}
             />
