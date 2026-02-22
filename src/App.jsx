@@ -135,6 +135,22 @@ function normalizeActuatorCommands(values) {
   });
 }
 
+function quaternionToEuler(quaternion) {
+  const { x, y, z, w } = quaternion;
+  const sinrCosp = 2 * (w * x + y * z);
+  const cosrCosp = 1 - 2 * (x * x + y * y);
+  const roll = Math.atan2(sinrCosp, cosrCosp);
+
+  const sinp = 2 * (w * y - z * x);
+  const pitch = Math.asin(Math.min(1, Math.max(-1, sinp)));
+
+  const sinyCosp = 2 * (w * z + x * y);
+  const cosyCosp = 1 - 2 * (y * y + z * z);
+  const yaw = Math.atan2(sinyCosp, cosyCosp);
+
+  return [roll, pitch, yaw];
+}
+
 function toSimSample(payload, context, motionScale, tailsitterPitchCorrection = false) {
   const timeUsec = Number(payload?.time_usec);
   const positionNed = payload?.position_ned_m;
@@ -154,15 +170,12 @@ function toSimSample(payload, context, motionScale, tailsitterPitchCorrection = 
     Number(quaternionWxyz[3]) || 0,
     Number(quaternionWxyz[0]) || 1,
   ).normalize();
-  const displayTelemetryQuat = tailsitterPitchCorrection
-    ? telemetryQuat.clone().multiply(SIM_TAILSITTER_PITCH_CORRECTION_QUAT)
-    : telemetryQuat;
-  const displayEuler = new Euler().setFromQuaternion(displayTelemetryQuat, "XYZ");
-  const roll = displayEuler.x;
-  const pitch = displayEuler.y;
-  const yaw = displayEuler.z;
-  const rawEuler = new Euler().setFromQuaternion(telemetryQuat, "XYZ");
-  const rawYaw = rawEuler.z;
+  const displayTelemetryQuat = telemetryQuat.clone();
+  if (tailsitterPitchCorrection) {
+    displayTelemetryQuat.premultiply(SIM_TAILSITTER_PITCH_CORRECTION_QUAT).normalize();
+  }
+  const [roll, pitch, yaw] = quaternionToEuler(displayTelemetryQuat);
+  const [, , rawYaw] = quaternionToEuler(telemetryQuat);
 
   const renderQuat = NED_TO_SCENE_QUAT.clone().multiply(telemetryQuat);
 
