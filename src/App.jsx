@@ -10,6 +10,7 @@ import SignalPlots from "./components/SignalPlots";
 import SimMapOverlay from "./components/SimMapOverlay";
 import { parseUlogFile } from "./lib/telemetryLoader";
 import { sampleAtTime } from "./lib/telemetryMath";
+import { parseAeroTableText } from "./lib/aeroTable";
 import "./App.css";
 
 const SAMPLE_LOG_PATH = "/sample-flight.ulg";
@@ -37,6 +38,10 @@ const DEFAULT_SIM_HOST = "127.0.0.1";
 const DEFAULT_SIM_PORT = "8765";
 const DEFAULT_MODEL_TYPE = "stl";
 const DEFAULT_MODEL_SCALE = 1.2;
+const DEFAULT_AERO_ALPHA_MIN = -20;
+const DEFAULT_AERO_ALPHA_MAX = 20;
+const DEFAULT_AERO_BETA_MIN = -20;
+const DEFAULT_AERO_BETA_MAX = 20;
 const SIM_MOTION_SCALE = 0.3;
 const SIM_TRAIL_POINTS = 240;
 const NED_TO_SCENE_QUAT = new Quaternion().setFromRotationMatrix(
@@ -79,7 +84,7 @@ function createDefaultVehicleMeshSettings() {
     modelType: DEFAULT_MODEL_TYPE,
     modelScale: DEFAULT_MODEL_SCALE,
     rotateTailsitter90: false,
-    tailsitterPitchCorrection: false,
+    tailsitterPitchCorrection: true,
     customStlUrl: "",
     customStlName: "",
   };
@@ -135,20 +140,17 @@ function normalizeActuatorCommands(values) {
   });
 }
 
+function finiteOrNull(value) {
+  if (value == null || value === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function quaternionToEuler(quaternion) {
-  const { x, y, z, w } = quaternion;
-  const sinrCosp = 2 * (w * x + y * z);
-  const cosrCosp = 1 - 2 * (x * x + y * y);
-  const roll = Math.atan2(sinrCosp, cosrCosp);
-
-  const sinp = 2 * (w * y - z * x);
-  const pitch = Math.asin(Math.min(1, Math.max(-1, sinp)));
-
-  const sinyCosp = 2 * (w * z + x * y);
-  const cosyCosp = 1 - 2 * (y * y + z * z);
-  const yaw = Math.atan2(sinyCosp, cosyCosp);
-
-  return [roll, pitch, yaw];
+  const euler = new Euler().setFromQuaternion(quaternion, "XYZ");
+  return [euler.x, euler.y, euler.z];
 }
 
 function toSimSample(payload, context, motionScale, tailsitterPitchCorrection = false) {
@@ -172,7 +174,7 @@ function toSimSample(payload, context, motionScale, tailsitterPitchCorrection = 
   ).normalize();
   const displayTelemetryQuat = telemetryQuat.clone();
   if (tailsitterPitchCorrection) {
-    displayTelemetryQuat.premultiply(SIM_TAILSITTER_PITCH_CORRECTION_QUAT).normalize();
+    displayTelemetryQuat.multiply(SIM_TAILSITTER_PITCH_CORRECTION_QUAT).normalize();
   }
   const [roll, pitch, yaw] = quaternionToEuler(displayTelemetryQuat);
   const [, , rawYaw] = quaternionToEuler(telemetryQuat);
@@ -215,6 +217,8 @@ function toSimSample(payload, context, motionScale, tailsitterPitchCorrection = 
   const rawSystemId = Number(payload?.system_id);
   const systemId = Number.isFinite(rawSystemId) ? Math.trunc(rawSystemId) : null;
   const actuatorCommands = normalizeActuatorCommands(payload?.u);
+  const aeroAlphaDeg = finiteOrNull(payload?.aero?.alpha_deg);
+  const aeroBetaDeg = finiteOrNull(payload?.aero?.beta_deg);
 
   const sample = {
     time: (timeUsec - context.firstTimeUsec) / 1e6,
@@ -232,6 +236,8 @@ function toSimSample(payload, context, motionScale, tailsitterPitchCorrection = 
     headingDeg,
     systemId,
     u: actuatorCommands,
+    aeroAlphaDeg,
+    aeroBetaDeg,
     flightMode: "Simulator",
     vehicleState: "SITL",
     vehicleType: "Simulator",
@@ -280,6 +286,13 @@ function App() {
   const [showInterVehicleLinks, setShowInterVehicleLinks] = useState(false);
   const [simMaxDistanceMeters, setSimMaxDistanceMeters] = useState("");
   const [rotateTailsitter90, setRotateTailsitter90] = useState(false);
+  const [simAeroFileName, setSimAeroFileName] = useState("");
+  const [simAeroTable, setSimAeroTable] = useState(null);
+  const [simAeroError, setSimAeroError] = useState(null);
+  const [simAeroAlphaMinInput, setSimAeroAlphaMinInput] = useState(String(DEFAULT_AERO_ALPHA_MIN));
+  const [simAeroAlphaMaxInput, setSimAeroAlphaMaxInput] = useState(String(DEFAULT_AERO_ALPHA_MAX));
+  const [simAeroBetaMinInput, setSimAeroBetaMinInput] = useState(String(DEFAULT_AERO_BETA_MIN));
+  const [simAeroBetaMaxInput, setSimAeroBetaMaxInput] = useState(String(DEFAULT_AERO_BETA_MAX));
 
   const simSocketsRef = useRef(new Map());
   const simContextsRef = useRef(new Map());
@@ -559,6 +572,24 @@ function App() {
     [selectedSystemId],
   );
 
+  const handleSimAeroFileSelected = useCallback(async (file) => {
+    if (!file) {
+      return;
+    }
+
+    setSimAeroError(null);
+    setSimAeroFileName(file.name);
+
+    try {
+      const text = await file.text();
+      const parsed = parseAeroTableText(text);
+      setSimAeroTable(parsed);
+    } catch (err) {
+      setSimAeroTable(null);
+      setSimAeroError(err?.message ?? String(err));
+    }
+  }, []);
+
   const handleScrub = useCallback(
     (nextTime) => {
       setTime((prev) => {
@@ -832,6 +863,18 @@ function App() {
     }
     return `${buildWsUrl(source.host, source.port)} (sys ${selectedVehicle.systemId})`;
   }, [selectedVehicle, simConnections]);
+  const simAeroAlphaMin = Number(simAeroAlphaMinInput);
+  const simAeroAlphaMax = Number(simAeroAlphaMaxInput);
+  const simAeroBetaMin = Number(simAeroBetaMinInput);
+  const simAeroBetaMax = Number(simAeroBetaMaxInput);
+  const simAeroAlphaRangeValid = Number.isFinite(simAeroAlphaMin) && Number.isFinite(simAeroAlphaMax) && simAeroAlphaMin < simAeroAlphaMax;
+  const simAeroBetaRangeValid = Number.isFinite(simAeroBetaMin) && Number.isFinite(simAeroBetaMax) && simAeroBetaMin < simAeroBetaMax;
+  const simAeroAlphaRange = simAeroAlphaRangeValid
+    ? [simAeroAlphaMin, simAeroAlphaMax]
+    : [DEFAULT_AERO_ALPHA_MIN, DEFAULT_AERO_ALPHA_MAX];
+  const simAeroBetaRange = simAeroBetaRangeValid
+    ? [simAeroBetaMin, simAeroBetaMax]
+    : [DEFAULT_AERO_BETA_MIN, DEFAULT_AERO_BETA_MAX];
 
   const sceneSample = activeView === "log" ? currentSample : selectedSimSample;
 
@@ -955,6 +998,21 @@ function App() {
                 maxDistanceMeters={simMaxDistanceThreshold}
                 maxDistanceInput={simMaxDistanceMeters}
                 onMaxDistanceInputChange={setSimMaxDistanceMeters}
+                aeroTable={simAeroTable}
+                aeroFileName={simAeroFileName}
+                aeroError={simAeroError}
+                alphaMinInput={simAeroAlphaMinInput}
+                alphaMaxInput={simAeroAlphaMaxInput}
+                betaMinInput={simAeroBetaMinInput}
+                betaMaxInput={simAeroBetaMaxInput}
+                onAlphaMinInputChange={setSimAeroAlphaMinInput}
+                onAlphaMaxInputChange={setSimAeroAlphaMaxInput}
+                onBetaMinInputChange={setSimAeroBetaMinInput}
+                onBetaMaxInputChange={setSimAeroBetaMaxInput}
+                alphaRange={simAeroAlphaRange}
+                betaRange={simAeroBetaRange}
+                alphaRangeValid={simAeroAlphaRangeValid}
+                betaRangeValid={simAeroBetaRangeValid}
               />
             )}
             <div className="scene-center-hud">
@@ -1073,6 +1131,9 @@ function App() {
               onTailsitterPitchCorrectionChange={handleSelectedSimPitchCorrectionChange}
               onCustomStlSelected={handleSelectedSimCustomStlSelected}
               customStlName={selectedSimVehicleMesh.customStlName}
+              onAeroFileSelected={handleSimAeroFileSelected}
+              aeroFileName={simAeroFileName}
+              aeroError={simAeroError}
             />
           )}
         </aside>

@@ -36,6 +36,9 @@ function SimulatorControls({
   onTailsitterPitchCorrectionChange,
   onCustomStlSelected,
   customStlName,
+  onAeroFileSelected,
+  aeroFileName,
+  aeroError,
 }) {
   const [expandedConnectionIds, setExpandedConnectionIds] = useState(() => new Set());
 
@@ -52,6 +55,14 @@ function SimulatorControls({
     const file = event.target.files?.[0];
     if (file) {
       onCustomStlSelected(file);
+    }
+    event.target.value = "";
+  };
+
+  const handleAeroFileChange = (event) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      onAeroFileSelected?.(file);
     }
     event.target.value = "";
   };
@@ -190,12 +201,27 @@ function SimulatorControls({
     "lon_deg": 8.545594,
     "alt_m": 488.3
   },
+  "aero": {
+    "alpha_deg": -1.61,
+    "beta_deg": 3.22
+  },
   "heading_deg": 123.4,
   "u": [u0, u1, u2, u3, u4, u5, u6, u7]
 }`}</pre>
             </div>
           </details>
         </div>
+      </div>
+
+      <div className="panel-block">
+        <span className="label">System aerodynamics table</span>
+        <label className="file-input upload-file-row">
+          <span>Upload aero CSV/TXT</span>
+          <input type="file" accept=".csv,.txt,.dat" onChange={handleAeroFileChange} />
+        </label>
+        <div className="input-meta">{aeroFileName || "No aero table selected"}</div>
+        {aeroError && <p className="error-line">{aeroError}</p>}
+        <div className="input-meta">Expected: alpha,beta,cx,cy,cz,cl,cm,cn</div>
       </div>
 
       <div className="panel-block">

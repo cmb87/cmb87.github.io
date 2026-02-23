@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CircleMarker, MapContainer, Polygon, Polyline, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { formatSeconds } from "../lib/telemetryMath";
+import { AERO_COEFFICIENT_KEYS } from "../lib/aeroTable";
 
 const DEFAULT_ZOOM = 17;
 const HEADING_LINE_METERS = 16;
@@ -13,6 +14,10 @@ const TREND_COLORS = ["#f59e0b", "#22d3ee", "#38bdf8", "#a78bfa", "#84cc16"];
 const ACTUATOR_COUNT = 8;
 const TRIANGLE_FRONT_METERS = 20;
 const TRIANGLE_REAR_METERS = 14;
+const AERO_PLOT_WIDTH = 420;
+const AERO_PLOT_HEIGHT = 170;
+const AERO_COLORS = ["#22d3ee", "#38bdf8", "#a78bfa", "#f59e0b", "#f97316", "#f43f5e"];
+const AERO_LABELS = ["Cx", "Cy", "Cz", "Cl", "Cm", "Cn"];
 
 function toRad(value) {
   return (value * Math.PI) / 180;
@@ -136,6 +141,202 @@ function renderTrendPlot(series, visibleChannels) {
   );
 }
 
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function nearestValue(values, target) {
+  if (!values.length) {
+    return null;
+  }
+  let best = values[0];
+  let bestDist = Math.abs(values[0] - target);
+  for (let i = 1; i < values.length; i += 1) {
+    const dist = Math.abs(values[i] - target);
+    if (dist < bestDist) {
+      best = values[i];
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+function dedupeSortedByX(points) {
+  if (!points.length) {
+    return [];
+  }
+  const sorted = [...points].sort((a, b) => a.x - b.x);
+  const deduped = [sorted[0]];
+  for (let i = 1; i < sorted.length; i += 1) {
+    const previous = deduped[deduped.length - 1];
+    const current = sorted[i];
+    if (Math.abs(current.x - previous.x) < 1e-9) {
+      deduped[deduped.length - 1] = current;
+    } else {
+      deduped.push(current);
+    }
+  }
+  return deduped;
+}
+
+function interpolateCoeff(points, x, coeffIndex) {
+  if (!points.length) {
+    return 0;
+  }
+  if (points.length === 1) {
+    return points[0].coefficients[coeffIndex] ?? 0;
+  }
+  if (x <= points[0].x) {
+    return points[0].coefficients[coeffIndex] ?? 0;
+  }
+  if (x >= points[points.length - 1].x) {
+    return points[points.length - 1].coefficients[coeffIndex] ?? 0;
+  }
+
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const left = points[i];
+    const right = points[i + 1];
+    if (x < left.x || x > right.x) {
+      continue;
+    }
+    const xSpan = Math.max(1e-9, right.x - left.x);
+    const ratio = (x - left.x) / xSpan;
+    const leftY = left.coefficients[coeffIndex] ?? 0;
+    const rightY = right.coefficients[coeffIndex] ?? 0;
+    return leftY + (rightY - leftY) * ratio;
+  }
+
+  return points[points.length - 1].coefficients[coeffIndex] ?? 0;
+}
+
+function buildAeroSlice(rows, axis, fixedAxisValue) {
+  if (!rows.length) {
+    return [];
+  }
+  const fixedKey = axis === "alpha" ? "beta" : "alpha";
+  const varyingKey = axis === "alpha" ? "alpha" : "beta";
+  const uniqueFixed = Array.from(new Set(rows.map((row) => row[fixedKey]))).sort((a, b) => a - b);
+  const nearestFixed = nearestValue(uniqueFixed, fixedAxisValue);
+  if (!Number.isFinite(nearestFixed)) {
+    return [];
+  }
+
+  return dedupeSortedByX(
+    rows
+      .filter((row) => Math.abs(row[fixedKey] - nearestFixed) < 1e-9)
+      .map((row) => ({ x: row[varyingKey], coefficients: row.coefficients })),
+  );
+}
+
+function buildAeroCurves(slicePoints, xMin, xMax, sampleCount = 120) {
+  if (!slicePoints.length) {
+    return Array.from({ length: AERO_COEFFICIENT_KEYS.length }, () => []);
+  }
+  const curves = Array.from({ length: AERO_COEFFICIENT_KEYS.length }, () => []);
+  const span = Math.max(1e-9, xMax - xMin);
+  for (let i = 0; i < sampleCount; i += 1) {
+    const t = i / Math.max(sampleCount - 1, 1);
+    const x = xMin + span * t;
+    for (let coeffIndex = 0; coeffIndex < AERO_COEFFICIENT_KEYS.length; coeffIndex += 1) {
+      curves[coeffIndex].push({ x, y: interpolateCoeff(slicePoints, x, coeffIndex) });
+    }
+  }
+  return curves;
+}
+
+function renderAeroPlot({ title, xLabel, xRange, curves, markerX = null, markerValues = null, visibleChannels }) {
+  const [xMin, xMax] = xRange;
+  const activeIndices = Array.from(visibleChannels).sort((a, b) => a - b);
+  if (!activeIndices.length) {
+    return (
+      <div className="sim-map-empty">Enable at least one coefficient to draw aerodynamic curves.</div>
+    );
+  }
+
+  let yMin = Infinity;
+  let yMax = -Infinity;
+  for (const index of activeIndices) {
+    const channel = curves[index] ?? [];
+    for (const point of channel) {
+      if (!Number.isFinite(point.y)) {
+        continue;
+      }
+      yMin = Math.min(yMin, point.y);
+      yMax = Math.max(yMax, point.y);
+    }
+  }
+
+  if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) {
+    yMin = -1;
+    yMax = 1;
+  }
+  const ySpan = Math.max(1, yMax - yMin);
+  const paddedMin = yMin - ySpan * 0.15;
+  const paddedMax = yMax + ySpan * 0.15;
+
+  const toX = (x) => ((x - xMin) / Math.max(xMax - xMin, 1e-9)) * AERO_PLOT_WIDTH;
+  const toY = (y) => ((paddedMax - y) / Math.max(paddedMax - paddedMin, 1e-9)) * AERO_PLOT_HEIGHT;
+  const markerXClamped = Number.isFinite(markerX) ? clamp(markerX, xMin, xMax) : null;
+
+  return (
+    <div className="sim-map-panel sim-aero-plot-panel">
+      <div className="signal-header sim-trend-header">
+        <span>{title}</span>
+        <small>
+          {xLabel} [{xMin.toFixed(1)}, {xMax.toFixed(1)}] deg
+        </small>
+      </div>
+      <div className="signal-canvas sim-aero-canvas">
+        <svg viewBox={`0 0 ${AERO_PLOT_WIDTH} ${AERO_PLOT_HEIGHT}`} preserveAspectRatio="none" className="signal-svg">
+          <line
+            x1="0"
+            x2={AERO_PLOT_WIDTH}
+            y1={toY(0)}
+            y2={toY(0)}
+            className="signal-midline"
+          />
+          {curves.map((channelPoints, channelIndex) => {
+            if (!visibleChannels.has(channelIndex)) {
+              return null;
+            }
+            const points = channelPoints.map((point) => `${toX(point.x).toFixed(2)},${toY(point.y).toFixed(2)}`);
+            return points.length ? (
+              <polyline
+                key={AERO_COEFFICIENT_KEYS[channelIndex]}
+                points={points.join(" ")}
+                fill="none"
+                stroke={AERO_COLORS[channelIndex % AERO_COLORS.length]}
+                strokeWidth="2"
+              />
+            ) : null;
+          })}
+          {Number.isFinite(markerXClamped) &&
+            markerValues?.map((value, channelIndex) => {
+              if (!visibleChannels.has(channelIndex) || !Number.isFinite(value)) {
+                return null;
+              }
+              return (
+                <circle
+                  key={`marker-${AERO_COEFFICIENT_KEYS[channelIndex]}`}
+                  cx={toX(markerXClamped)}
+                  cy={toY(value)}
+                  r="5.2"
+                  fill={AERO_COLORS[channelIndex % AERO_COLORS.length]}
+                  stroke="#f8fafc"
+                  strokeWidth="1.5"
+                  className="sim-aero-marker"
+                />
+              );
+            })}
+          {Number.isFinite(markerXClamped) && (
+            <line x1={toX(markerXClamped)} x2={toX(markerXClamped)} y1="0" y2={AERO_PLOT_HEIGHT} className="signal-cursor" />
+          )}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 function toTriangle(currentGeo, headingDeg) {
   if (!currentGeo) {
     return [];
@@ -167,9 +368,25 @@ function SimMapOverlay({
   maxDistanceMeters = null,
   maxDistanceInput = "",
   onMaxDistanceInputChange,
+  aeroTable,
+  aeroFileName,
+  aeroError,
+  alphaMinInput,
+  alphaMaxInput,
+  betaMinInput,
+  betaMaxInput,
+  onAlphaMinInputChange,
+  onAlphaMaxInputChange,
+  onBetaMinInputChange,
+  onBetaMaxInputChange,
+  alphaRange,
+  betaRange,
+  alphaRangeValid,
+  betaRangeValid,
 }) {
   const [activeTab, setActiveTab] = useState("map");
   const [visibleTrend, setVisibleTrend] = useState(new Set());
+  const [visibleAero, setVisibleAero] = useState(new Set());
 
   const selectedVehicle = useMemo(
     () => simVehicles.find((vehicle) => vehicle.systemId === selectedSystemId) ?? simVehicles[0] ?? null,
@@ -332,6 +549,53 @@ function SimMapOverlay({
     setVisibleTrend((prev) => ensureVisibleSet(prev, TREND_LABELS.length));
   }, []);
 
+  useEffect(() => {
+    setVisibleAero((prev) => ensureVisibleSet(prev, AERO_COEFFICIENT_KEYS.length));
+  }, []);
+
+  const [alphaMin, alphaMax] = alphaRange;
+  const [betaMin, betaMax] = betaRange;
+  const currentAlphaDeg = Number.isFinite(selectedSample?.aeroAlphaDeg) ? selectedSample.aeroAlphaDeg : null;
+  const currentBetaDeg = Number.isFinite(selectedSample?.aeroBetaDeg) ? selectedSample.aeroBetaDeg : null;
+  const hasAeroTable = Array.isArray(aeroTable?.rows) && aeroTable.rows.length > 0;
+
+  const alphaSlicePoints = useMemo(() => {
+    if (!hasAeroTable) {
+      return [
+        { x: alphaMin, coefficients: [0, 0, 0, 0, 0, 0] },
+        { x: alphaMax, coefficients: [0, 0, 0, 0, 0, 0] },
+      ];
+    }
+    return buildAeroSlice(aeroTable.rows, "alpha", Number.isFinite(currentBetaDeg) ? currentBetaDeg : 0);
+  }, [aeroTable, alphaMin, alphaMax, currentBetaDeg, hasAeroTable]);
+
+  const betaSlicePoints = useMemo(() => {
+    if (!hasAeroTable) {
+      return [
+        { x: betaMin, coefficients: [0, 0, 0, 0, 0, 0] },
+        { x: betaMax, coefficients: [0, 0, 0, 0, 0, 0] },
+      ];
+    }
+    return buildAeroSlice(aeroTable.rows, "beta", Number.isFinite(currentAlphaDeg) ? currentAlphaDeg : 0);
+  }, [aeroTable, betaMin, betaMax, currentAlphaDeg, hasAeroTable]);
+
+  const alphaCurves = useMemo(() => buildAeroCurves(alphaSlicePoints, alphaMin, alphaMax), [alphaSlicePoints, alphaMin, alphaMax]);
+  const betaCurves = useMemo(() => buildAeroCurves(betaSlicePoints, betaMin, betaMax), [betaSlicePoints, betaMin, betaMax]);
+
+  const alphaMarkerValues = useMemo(() => {
+    if (!Number.isFinite(currentAlphaDeg)) {
+      return null;
+    }
+    return Array.from({ length: AERO_COEFFICIENT_KEYS.length }, (_, index) => interpolateCoeff(alphaSlicePoints, currentAlphaDeg, index));
+  }, [alphaSlicePoints, currentAlphaDeg]);
+
+  const betaMarkerValues = useMemo(() => {
+    if (!Number.isFinite(currentBetaDeg)) {
+      return null;
+    }
+    return Array.from({ length: AERO_COEFFICIENT_KEYS.length }, (_, index) => interpolateCoeff(betaSlicePoints, currentBetaDeg, index));
+  }, [betaSlicePoints, currentBetaDeg]);
+
   const hasGeoData = allVehicleGeos.length > 0;
 
   return (
@@ -371,6 +635,13 @@ function SimMapOverlay({
           onClick={() => setActiveTab("actuators")}
         >
           Actuators
+        </button>
+        <button
+          type="button"
+          className={`signal-tab ${activeTab === "aero" ? "active" : ""}`}
+          onClick={() => setActiveTab("aero")}
+        >
+          Aerodynamics
         </button>
       </div>
 
@@ -658,6 +929,102 @@ function SimMapOverlay({
             })}
           </div>
         </div>
+      )}
+
+      {activeTab === "aero" && (
+        <>
+          <div className="sim-map-panel sim-aero-control-panel">
+            <div className="signal-header sim-trend-header">
+              <span>System aerodynamics</span>
+              <small>{hasAeroTable ? aeroFileName || "table loaded" : "default zero curves"}</small>
+            </div>
+            <div className="sim-aero-range-grid">
+              <label>
+                <span>Min alpha (deg)</span>
+                <input type="number" value={alphaMinInput} onChange={(event) => onAlphaMinInputChange?.(event.target.value)} />
+              </label>
+              <label>
+                <span>Max alpha (deg)</span>
+                <input type="number" value={alphaMaxInput} onChange={(event) => onAlphaMaxInputChange?.(event.target.value)} />
+              </label>
+              <label>
+                <span>Min beta (deg)</span>
+                <input type="number" value={betaMinInput} onChange={(event) => onBetaMinInputChange?.(event.target.value)} />
+              </label>
+              <label>
+                <span>Max beta (deg)</span>
+                <input type="number" value={betaMaxInput} onChange={(event) => onBetaMaxInputChange?.(event.target.value)} />
+              </label>
+            </div>
+            {(!alphaRangeValid || !betaRangeValid) && (
+              <p className="error-line sim-aero-range-error">Invalid range: min must be smaller than max. Using fallback range.</p>
+            )}
+            {aeroError && <p className="error-line sim-aero-range-error">{aeroError}</p>}
+            <div className="signal-legend sim-trend-legend">
+              <div className="signal-legend-controls">
+                <button
+                  type="button"
+                  className="legend-link"
+                  onClick={() => setVisibleAero(new Set(Array.from({ length: AERO_COEFFICIENT_KEYS.length }, (_, index) => index)))}
+                >
+                  all
+                </button>
+                <button type="button" className="legend-link" onClick={() => setVisibleAero(new Set())}>
+                  none
+                </button>
+              </div>
+              {AERO_LABELS.map((label, index) => {
+                const active = visibleAero.has(index);
+                return (
+                  <button
+                    key={label}
+                    type="button"
+                    className={`legend-item ${active ? "active" : ""}`}
+                    onClick={() => {
+                      setVisibleAero((prev) => {
+                        const next = new Set(prev);
+                        next.has(index) ? next.delete(index) : next.add(index);
+                        return next;
+                      });
+                    }}
+                  >
+                    <span className="legend-swatch" style={{ backgroundColor: AERO_COLORS[index] }} />
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="sim-aero-note-row">
+              <small>
+                Current telemetry: alpha {Number.isFinite(currentAlphaDeg) ? `${currentAlphaDeg.toFixed(2)} deg` : "--"} | beta{" "}
+                {Number.isFinite(currentBetaDeg) ? `${currentBetaDeg.toFixed(2)} deg` : "--"}
+              </small>
+              {!Number.isFinite(currentAlphaDeg) || !Number.isFinite(currentBetaDeg) ? (
+                <small>No current aero telemetry marker (alpha/beta missing)</small>
+              ) : null}
+            </div>
+          </div>
+
+          {renderAeroPlot({
+            title: "Coefficient slice vs alpha (nearest current beta)",
+            xLabel: "alpha",
+            xRange: [alphaMin, alphaMax],
+            curves: alphaCurves,
+            markerX: currentAlphaDeg,
+            markerValues: alphaMarkerValues,
+            visibleChannels: visibleAero,
+          })}
+
+          {renderAeroPlot({
+            title: "Coefficient slice vs beta (nearest current alpha)",
+            xLabel: "beta",
+            xRange: [betaMin, betaMax],
+            curves: betaCurves,
+            markerX: currentBetaDeg,
+            markerValues: betaMarkerValues,
+            visibleChannels: visibleAero,
+          })}
+        </>
       )}
     </div>
   );
