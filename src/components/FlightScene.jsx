@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
-import { Line, OrbitControls } from "@react-three/drei";
+import { Line, OrbitControls, Text } from "@react-three/drei";
 import { Quaternion, Vector3 } from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 
@@ -13,6 +13,82 @@ const DEFAULT_MODEL_SCALE = 1.2;
 const PATH_ELEVATION = 0.08;
 const MIN_PATH_POINT_SEPARATION_SQ = 0.0004;
 const MAX_PATH_POINTS = 12000;
+
+function NedAxisLabels() {
+  return (
+    <group>
+      <Line
+        points={[
+          [0, 0.03, 0],
+          [6, 0.03, 0],
+        ]}
+        color="#38bdf8"
+        lineWidth={2.2}
+        depthTest={false}
+        depthWrite={false}
+        renderOrder={30}
+      />
+      <Line
+        points={[
+          [0, 0.03, 0],
+          [0, 0.03, -6],
+        ]}
+        color="#22d3ee"
+        lineWidth={2.2}
+        depthTest={false}
+        depthWrite={false}
+        renderOrder={30}
+      />
+      <Line
+        points={[
+          [0, 0.03, 0],
+          [0, -4.2, 0],
+        ]}
+        color="#f97316"
+        lineWidth={2.2}
+        depthTest={false}
+        depthWrite={false}
+        renderOrder={30}
+      />
+      <Text
+        position={[6.35, 0.22, 0]}
+        color="#93c5fd"
+        fontSize={0.62}
+        anchorX="left"
+        anchorY="middle"
+        material-depthTest={false}
+        material-depthWrite={false}
+        renderOrder={31}
+      >
+        E
+      </Text>
+      <Text
+        position={[0, 0.22, -6.35]}
+        color="#67e8f9"
+        fontSize={0.62}
+        anchorX="center"
+        anchorY="middle"
+        material-depthTest={false}
+        material-depthWrite={false}
+        renderOrder={31}
+      >
+        N
+      </Text>
+      <Text
+        position={[0, -4.5, 0]}
+        color="#fdba74"
+        fontSize={0.62}
+        anchorX="center"
+        anchorY="middle"
+        material-depthTest={false}
+        material-depthWrite={false}
+        renderOrder={31}
+      >
+        D
+      </Text>
+    </group>
+  );
+}
 
 function getDisplayPosition(sample) {
   const display = sample?.displayPosition;
@@ -461,6 +537,7 @@ export default function FlightScene({
         <meshStandardMaterial color="#f8fafc" emissive="#38bdf8" emissiveIntensity={0.45} />
       </mesh>
       <axesHelper args={[12]} />
+      <NedAxisLabels />
       {!simMode && <FlightPath samples={samples} />}
       {simMode && (
         <InterVehicleLinks
