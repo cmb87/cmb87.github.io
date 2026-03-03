@@ -37,13 +37,15 @@ const DEFAULT_ACTUATOR_LABELS = [
 const DEFAULT_SIM_HOST = "127.0.0.1";
 const DEFAULT_SIM_PORT = "8765";
 const DEFAULT_MODEL_TYPE = "stl";
-const DEFAULT_MODEL_SCALE = 1.2;
+const DEFAULT_MODEL_SCALE = 0.3;
 const DEFAULT_AERO_ALPHA_MIN = -20;
 const DEFAULT_AERO_ALPHA_MAX = 20;
 const DEFAULT_AERO_BETA_MIN = -20;
 const DEFAULT_AERO_BETA_MAX = 20;
 const SIM_MOTION_SCALE = 0.3;
+const DEFAULT_CAMERA_MODE = "free";
 const SIM_TRAIL_POINTS = 240;
+const SIM_UI_UPDATE_INTERVAL_MS = 50;
 const NED_TO_SCENE_QUAT = new Quaternion().setFromRotationMatrix(
   new Matrix4().set(
     0,
@@ -84,7 +86,7 @@ function createDefaultVehicleMeshSettings() {
     modelType: DEFAULT_MODEL_TYPE,
     modelScale: DEFAULT_MODEL_SCALE,
     rotateTailsitter90: false,
-    tailsitterPitchCorrection: true,
+    tailsitterPitchCorrection: false,
     customStlUrl: "",
     customStlName: "",
   };
@@ -189,7 +191,7 @@ function toSimSample(payload, context, motionScale, tailsitterPitchCorrection = 
   const scenePosition = toSceneVector(relativeNed);
   const displayPosition = [
     scenePosition[0] * motionScale,
-    scenePosition[1] * motionScale,
+    Math.max(0, scenePosition[1] * motionScale),
     scenePosition[2] * motionScale,
   ];
 
@@ -269,7 +271,7 @@ function App() {
   const [showActuatorLabels, setShowActuatorLabels] = useState(false);
 
   const [playing, setPlaying] = useState(false);
-  const [followCamera, setFollowCamera] = useState(false);
+  const [cameraMode, setCameraMode] = useState(DEFAULT_CAMERA_MODE);
   const [time, setTime] = useState(0);
   const [speed, setSpeed] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -293,6 +295,9 @@ function App() {
   const simContextsRef = useRef(new Map());
   const simConnectionStatsRef = useRef(new Map());
   const simVehicleMeshSettingsRef = useRef({});
+  const simVehiclesBySystemIdRef = useRef({});
+  const simUiFlushTimeoutRef = useRef(null);
+  const simLastUiFlushMsRef = useRef(0);
   const nextSimConnectionIdRef = useRef(2);
 
   const currentSample = useMemo(() => sampleAtTime(samples, time), [samples, time]);
@@ -598,12 +603,40 @@ function App() {
     [duration],
   );
 
-  const clearVehiclesForConnection = useCallback((connectionId) => {
-    setSimVehiclesBySystemId((prev) => {
-      const nextEntries = Object.entries(prev).filter(([, vehicle]) => vehicle.connectionId !== connectionId);
-      return Object.fromEntries(nextEntries);
-    });
+  const flushSimVehiclesToState = useCallback((nowMs = performance.now()) => {
+    simLastUiFlushMsRef.current = nowMs;
+    setSimVehiclesBySystemId({ ...simVehiclesBySystemIdRef.current });
   }, []);
+
+  const scheduleSimVehiclesFlush = useCallback(
+    (nowMs = performance.now()) => {
+      if (simUiFlushTimeoutRef.current != null) {
+        return;
+      }
+      const elapsed = nowMs - simLastUiFlushMsRef.current;
+      if (elapsed >= SIM_UI_UPDATE_INTERVAL_MS) {
+        flushSimVehiclesToState(nowMs);
+        return;
+      }
+      const waitMs = Math.max(0, SIM_UI_UPDATE_INTERVAL_MS - elapsed);
+      simUiFlushTimeoutRef.current = window.setTimeout(() => {
+        simUiFlushTimeoutRef.current = null;
+        flushSimVehiclesToState(performance.now());
+      }, waitMs);
+    },
+    [flushSimVehiclesToState],
+  );
+
+  const clearVehiclesForConnection = useCallback((connectionId) => {
+    const next = {};
+    for (const [key, vehicle] of Object.entries(simVehiclesBySystemIdRef.current)) {
+      if (vehicle.connectionId !== connectionId) {
+        next[key] = vehicle;
+      }
+    }
+    simVehiclesBySystemIdRef.current = next;
+    flushSimVehiclesToState();
+  }, [flushSimVehiclesToState]);
 
   const closeSimConnectionSocket = useCallback((connectionId) => {
     const socket = simSocketsRef.current.get(connectionId);
@@ -731,24 +764,23 @@ function App() {
         }
 
         const systemId = Math.trunc(sample.systemId);
-        setSimVehiclesBySystemId((prev) => {
-          const key = String(systemId);
-          const existing = prev[key];
-          const prevTrail = Array.isArray(existing?.trailSamples) ? existing.trailSamples : [];
-          const nextTrail = [...prevTrail, sample];
-          if (nextTrail.length > SIM_TRAIL_POINTS) {
-            nextTrail.splice(0, nextTrail.length - SIM_TRAIL_POINTS);
-          }
-          return {
-            ...prev,
-            [key]: {
-              systemId,
-              connectionId,
-              latestSample: sample,
-              trailSamples: nextTrail,
-            },
-          };
-        });
+        const key = String(systemId);
+        const existing = simVehiclesBySystemIdRef.current[key];
+        const prevTrail = Array.isArray(existing?.trailSamples) ? existing.trailSamples : [];
+        const nextTrail = [...prevTrail, sample];
+        if (nextTrail.length > SIM_TRAIL_POINTS) {
+          nextTrail.splice(0, nextTrail.length - SIM_TRAIL_POINTS);
+        }
+        simVehiclesBySystemIdRef.current = {
+          ...simVehiclesBySystemIdRef.current,
+          [key]: {
+            systemId,
+            connectionId,
+            latestSample: sample,
+            trailSamples: nextTrail,
+          },
+        };
+        scheduleSimVehiclesFlush();
 
         const stats = simConnectionStatsRef.current.get(connectionId) ?? {
           frameCount: 0,
@@ -784,11 +816,14 @@ function App() {
         clearVehiclesForConnection(connectionId);
       };
     },
-    [clearVehiclesForConnection, closeSimConnectionSocket, setConnectionState, simConnections],
+    [clearVehiclesForConnection, closeSimConnectionSocket, scheduleSimVehiclesFlush, setConnectionState, simConnections],
   );
 
   useEffect(
     () => () => {
+      if (simUiFlushTimeoutRef.current != null) {
+        clearTimeout(simUiFlushTimeoutRef.current);
+      }
       for (const connectionId of simSocketsRef.current.keys()) {
         closeSimConnectionSocket(connectionId);
       }
@@ -955,7 +990,7 @@ function App() {
                 modelType={modelType}
                 modelScale={modelScale}
                 customModelUrl={customStlUrl}
-                followCamera={followCamera}
+                cameraMode={cameraMode}
                 simMode={activeView === "sim"}
                 rotateTailsitter90={rotateTailsitter90}
                 simVehicles={simVehicleList}
@@ -1052,8 +1087,8 @@ function App() {
               onPlayToggle={() => setPlaying((prev) => !prev)}
               onScrub={handleScrub}
               onSpeedChange={setSpeed}
-              followCamera={followCamera}
-              onFollowCameraChange={setFollowCamera}
+              cameraMode={cameraMode}
+              onCameraModeChange={setCameraMode}
               onReset={resetPlayback}
             />
           ) : (
@@ -1064,12 +1099,12 @@ function App() {
                 </span>
                 <div className="sim-live-toggles">
                   <label>
-                    <input
-                      type="checkbox"
-                      checked={followCamera}
-                      onChange={(event) => setFollowCamera(event.target.checked)}
-                    />
-                    Follow camera
+                    Camera
+                    <select value={cameraMode} onChange={(event) => setCameraMode(event.target.value)}>
+                      <option value="free">Free moving</option>
+                      <option value="follow-third">Follow 3rd person</option>
+                      <option value="follow-first">First person</option>
+                    </select>
                   </label>
                   <label>
                     <input

@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
-import { Line, OrbitControls, Text } from "@react-three/drei";
+import { Html, Line, OrbitControls } from "@react-three/drei";
 import { Quaternion, Vector3 } from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 
@@ -9,10 +9,22 @@ const qTailOffset = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), -Mat
 const qSimStlOffset = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 2);
 const qRotate90Offset = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 2);
 const DEFAULT_STL = "/models/quad.stl";
-const DEFAULT_MODEL_SCALE = 1.2;
+const DEFAULT_MODEL_SCALE = 0.3;
 const PATH_ELEVATION = 0.08;
 const MIN_PATH_POINT_SEPARATION_SQ = 0.0004;
 const MAX_PATH_POINTS = 12000;
+const CAMERA_MODE_FREE = "free";
+const CAMERA_MODE_FOLLOW_THIRD = "follow-third";
+const CAMERA_MODE_FOLLOW_FIRST = "follow-first";
+const WORLD_UP = new Vector3(0, 1, 0);
+const AXIS_LABEL_STYLE = {
+  fontFamily: "Space Grotesk, sans-serif",
+  fontSize: "14px",
+  fontWeight: 700,
+  letterSpacing: "0.03em",
+  userSelect: "none",
+  pointerEvents: "none",
+};
 
 function NedAxisLabels() {
   return (
@@ -50,42 +62,15 @@ function NedAxisLabels() {
         depthWrite={false}
         renderOrder={30}
       />
-      <Text
-        position={[6.35, 0.22, 0]}
-        color="#93c5fd"
-        fontSize={0.62}
-        anchorX="left"
-        anchorY="middle"
-        material-depthTest={false}
-        material-depthWrite={false}
-        renderOrder={31}
-      >
-        E
-      </Text>
-      <Text
-        position={[0, 0.22, -6.35]}
-        color="#67e8f9"
-        fontSize={0.62}
-        anchorX="center"
-        anchorY="middle"
-        material-depthTest={false}
-        material-depthWrite={false}
-        renderOrder={31}
-      >
-        N
-      </Text>
-      <Text
-        position={[0, -4.5, 0]}
-        color="#fdba74"
-        fontSize={0.62}
-        anchorX="center"
-        anchorY="middle"
-        material-depthTest={false}
-        material-depthWrite={false}
-        renderOrder={31}
-      >
-        D
-      </Text>
+      <Html position={[6.35, 0.22, 0]} center transform={false}>
+        <span style={{ ...AXIS_LABEL_STYLE, color: "#93c5fd" }}>E</span>
+      </Html>
+      <Html position={[0, 0.22, -6.35]} center transform={false}>
+        <span style={{ ...AXIS_LABEL_STYLE, color: "#67e8f9" }}>N</span>
+      </Html>
+      <Html position={[0, -4.5, 0]} center transform={false}>
+        <span style={{ ...AXIS_LABEL_STYLE, color: "#fdba74" }}>D</span>
+      </Html>
     </group>
   );
 }
@@ -95,7 +80,11 @@ function getDisplayPosition(sample) {
   if (Array.isArray(display) && display.length >= 3 && display.every((value) => Number.isFinite(value))) {
     return display;
   }
-  return sample?.position;
+  const position = sample?.position;
+  if (Array.isArray(position) && position.length >= 3 && position.every((value) => Number.isFinite(value))) {
+    return position;
+  }
+  return null;
 }
 
 function toRad(value) {
@@ -383,23 +372,38 @@ function InterVehicleLinks({ simVehicles, show, maxDistanceMeters = null }) {
   ));
 }
 
-function CameraFollower({ activeSample, followCamera, controlsRef, targetKey = null }) {
+function CameraFollower({ activeSample, cameraMode, controlsRef, targetKey = null }) {
   const { camera } = useThree();
   const offsetRef = useRef(new Vector3(...CAMERA_POSITION));
-  const wasFollowingRef = useRef(false);
+  const wasFollowingThirdRef = useRef(false);
   const userOrbitingRef = useRef(false);
   const sampleRef = useRef(activeSample ?? null);
   const targetPos = useMemo(() => new Vector3(), []);
   const desiredPos = useMemo(() => new Vector3(), []);
   const currentOffset = useMemo(() => new Vector3(), []);
+  const renderQuat = useMemo(() => new Quaternion(), []);
+  const viewForward = useMemo(() => new Vector3(), []);
+  const viewUp = useMemo(() => new Vector3(), []);
+  const lookTarget = useMemo(() => new Vector3(), []);
 
   useEffect(() => {
     sampleRef.current = activeSample ?? null;
   }, [activeSample]);
 
   useEffect(() => {
+    const controls = controlsRef.current;
+    if (!controls) {
+      return;
+    }
+    controls.enabled = cameraMode !== CAMERA_MODE_FOLLOW_FIRST;
+    if (controls.enabled) {
+      controls.update();
+    }
+  }, [cameraMode, controlsRef]);
+
+  useEffect(() => {
     const sample = sampleRef.current;
-    if (!followCamera || !sample) {
+    if (cameraMode !== CAMERA_MODE_FOLLOW_THIRD || !sample) {
       return;
     }
     const displayPosition = getDisplayPosition(sample);
@@ -414,9 +418,9 @@ function CameraFollower({ activeSample, followCamera, controlsRef, targetKey = n
       controls.target.copy(targetPos);
       controls.update();
     }
-    wasFollowingRef.current = true;
+    wasFollowingThirdRef.current = true;
     userOrbitingRef.current = false;
-  }, [camera, controlsRef, desiredPos, followCamera, targetKey, targetPos]);
+  }, [camera, cameraMode, controlsRef, desiredPos, targetKey, targetPos]);
 
   useEffect(() => {
     const controls = controlsRef.current;
@@ -441,8 +445,9 @@ function CameraFollower({ activeSample, followCamera, controlsRef, targetKey = n
   }, [controlsRef]);
 
   useFrame(() => {
-    if (!followCamera || !activeSample) {
-      wasFollowingRef.current = false;
+    if (!activeSample) {
+      camera.up.copy(WORLD_UP);
+      wasFollowingThirdRef.current = false;
       userOrbitingRef.current = false;
       return;
     }
@@ -453,13 +458,42 @@ function CameraFollower({ activeSample, followCamera, controlsRef, targetKey = n
     }
     targetPos.set(displayPosition[0], displayPosition[1], displayPosition[2]);
     const controls = controlsRef.current;
-    if (!wasFollowingRef.current) {
+
+    if (cameraMode === CAMERA_MODE_FOLLOW_FIRST) {
+      const q = activeSample.quaternion;
+      if (!Array.isArray(q) || q.length < 4 || !q.every((value) => Number.isFinite(value))) {
+        return;
+      }
+      renderQuat.set(q[0], q[1], q[2], q[3]).normalize();
+      viewForward.set(1, 0, 0).applyQuaternion(renderQuat).normalize();
+      viewUp.set(0, 0, -1).applyQuaternion(renderQuat).normalize();
+
+      desiredPos.copy(targetPos).addScaledVector(viewUp, 0.22).addScaledVector(viewForward, 0.35);
+      camera.position.lerp(desiredPos, 0.24);
+      lookTarget.copy(camera.position).addScaledVector(viewForward, 12);
+      camera.up.copy(viewUp);
+      camera.lookAt(lookTarget);
+      wasFollowingThirdRef.current = false;
+      userOrbitingRef.current = false;
+      return;
+    }
+
+    if (cameraMode !== CAMERA_MODE_FOLLOW_THIRD) {
+      camera.up.copy(WORLD_UP);
+      wasFollowingThirdRef.current = false;
+      userOrbitingRef.current = false;
+      return;
+    }
+
+    camera.up.copy(WORLD_UP);
+
+    if (!wasFollowingThirdRef.current) {
       if (controls) {
         controls.target.copy(targetPos);
         controls.update();
       }
       offsetRef.current.copy(camera.position).sub(targetPos);
-      wasFollowingRef.current = true;
+      wasFollowingThirdRef.current = true;
     }
 
     if (controls && userOrbitingRef.current) {
@@ -496,7 +530,7 @@ export default function FlightScene({
   modelType,
   modelScale,
   customModelUrl,
-  followCamera,
+  cameraMode = CAMERA_MODE_FREE,
   simMode,
   rotateTailsitter90 = false,
   simSmoothing = 0.55,
@@ -517,20 +551,29 @@ export default function FlightScene({
     simVehicles.find((vehicle) => vehicle.systemId === selectedSystemId)?.latestSample ?? simVehicles[0]?.latestSample ?? null;
 
   return (
-    <Canvas shadows={enableShadows} camera={{ position: CAMERA_POSITION, fov: 50 }} dpr={simMode ? [1, 1.3] : [1, 1.75]}>
+    <Canvas shadows={enableShadows} camera={{ position: CAMERA_POSITION, fov: 50 }} dpr={simMode ? [1, 1.2] : [1, 1.45]}>
       <color attach="background" args={["#050912"]} />
       <ambientLight intensity={0.42} />
       <directionalLight
         position={[45, 60, 30]}
         intensity={1.35}
         castShadow={enableShadows}
-        shadow-mapSize={enableShadows ? [2048, 2048] : [512, 512]}
+        shadow-mapSize={enableShadows ? [1536, 1536] : [512, 512]}
       />
       <OrbitControls ref={controlsRef} maxDistance={160} minDistance={1} enablePan enableDamping dampingFactor={0.08} />
       <gridHelper args={[400, 80, 0x2b5b88, 0x1d3b58]} position={[0, 0, 0]} />
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]} receiveShadow={enableShadows}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow={enableShadows}>
         <planeGeometry args={[600, 600]} />
-        <meshStandardMaterial color="#13253b" metalness={0} roughness={1} opacity={0.92} transparent />
+        <meshStandardMaterial
+          color="#13253b"
+          metalness={0}
+          roughness={1}
+          opacity={0.92}
+          transparent
+          polygonOffset
+          polygonOffsetFactor={1}
+          polygonOffsetUnits={1}
+        />
       </mesh>
       <mesh position={[0, 0.05, 0]}>
         <sphereGeometry args={[0.12, 16, 16]} />
@@ -548,7 +591,7 @@ export default function FlightScene({
       )}
       <CameraFollower
         activeSample={simMode ? selectedSimSample : activeSample}
-        followCamera={followCamera}
+        cameraMode={cameraMode}
         controlsRef={controlsRef}
         targetKey={simMode ? selectedSystemId : null}
       />

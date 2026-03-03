@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleMarker, MapContainer, Polygon, Polyline, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { formatSeconds } from "../lib/telemetryMath";
@@ -18,6 +18,8 @@ const AERO_PLOT_WIDTH = 420;
 const AERO_PLOT_HEIGHT = 170;
 const AERO_COLORS = ["#22d3ee", "#38bdf8", "#a78bfa", "#f59e0b", "#f97316", "#f43f5e"];
 const AERO_LABELS = ["Cx", "Cy", "Cz", "Cl", "Cm", "Cn"];
+const MAP_RECENTER_MIN_INTERVAL_MS = 160;
+const MAP_RECENTER_MIN_MOVE_METERS = 1.5;
 
 function toRad(value) {
   return (value * Math.PI) / 180;
@@ -350,12 +352,26 @@ function toTriangle(currentGeo, headingDeg) {
 
 function MapViewportController({ currentGeo }) {
   const map = useMap();
+  const lastUpdateRef = useRef({ timeMs: 0, geo: null });
 
   useEffect(() => {
     if (!currentGeo) {
       return;
     }
+    const lastUpdate = lastUpdateRef.current;
+    const nowMs = performance.now();
+    const elapsedMs = nowMs - lastUpdate.timeMs;
+    if (elapsedMs < MAP_RECENTER_MIN_INTERVAL_MS) {
+      return;
+    }
+    if (lastUpdate.geo) {
+      const moved = haversineMeters(lastUpdate.geo[0], lastUpdate.geo[1], currentGeo[0], currentGeo[1]);
+      if (moved < MAP_RECENTER_MIN_MOVE_METERS) {
+        return;
+      }
+    }
     map.setView(currentGeo, DEFAULT_ZOOM, { animate: false });
+    lastUpdateRef.current = { timeMs: nowMs, geo: currentGeo };
   }, [currentGeo, map]);
 
   return null;
@@ -415,6 +431,10 @@ function SimMapOverlay({
   );
 
   const interVehicleDistances = useMemo(() => {
+    const includePairs = activeTab === "distance" || showInterVehicleLinks;
+    if (!includePairs) {
+      return [];
+    }
     const thresholdActive = Number.isFinite(maxDistanceMeters) && maxDistanceMeters > 0;
     const pairs = [];
     for (let i = 0; i < allVehicleGeos.length; i += 1) {
@@ -455,6 +475,25 @@ function SimMapOverlay({
   const selectedTrailCoords = useMemo(
     () => selectedGeoSamples.map((item) => [item.latDeg, item.lonDeg]),
     [selectedGeoSamples],
+  );
+  const vehicleTrailCoords = useMemo(
+    () =>
+      simVehicles
+        .map((vehicle) => {
+          const coords = (vehicle.trailSamples ?? [])
+            .filter((item) => Number.isFinite(item?.latDeg) && Number.isFinite(item?.lonDeg))
+            .map((item) => [item.latDeg, item.lonDeg]);
+          if (!coords.length) {
+            return null;
+          }
+          return {
+            systemId: vehicle.systemId,
+            coords,
+            selected: vehicle.systemId === selectedVehicle?.systemId,
+          };
+        })
+        .filter(Boolean),
+    [selectedVehicle?.systemId, simVehicles],
   );
   const startGeo = selectedTrailCoords.length ? selectedTrailCoords[0] : null;
 
@@ -513,6 +552,9 @@ function SimMapOverlay({
   }, [selectedSample?.u]);
 
   const trendSeries = useMemo(() => {
+    if (activeTab !== "trend") {
+      return [];
+    }
     const withTrendData = selectedSamples.filter((item) => {
       const velocity = item?.velocity ?? [];
       return (
@@ -543,7 +585,7 @@ function SimMapOverlay({
         ],
       };
     });
-  }, [selectedSamples]);
+  }, [activeTab, selectedSamples]);
 
   useEffect(() => {
     setVisibleTrend((prev) => ensureVisibleSet(prev, TREND_LABELS.length));
@@ -560,6 +602,9 @@ function SimMapOverlay({
   const hasAeroTable = Array.isArray(aeroTable?.rows) && aeroTable.rows.length > 0;
 
   const alphaSlicePoints = useMemo(() => {
+    if (activeTab !== "aero") {
+      return [];
+    }
     if (!hasAeroTable) {
       return [
         { x: alphaMin, coefficients: [0, 0, 0, 0, 0, 0] },
@@ -567,9 +612,12 @@ function SimMapOverlay({
       ];
     }
     return buildAeroSlice(aeroTable.rows, "alpha", Number.isFinite(currentBetaDeg) ? currentBetaDeg : 0);
-  }, [aeroTable, alphaMin, alphaMax, currentBetaDeg, hasAeroTable]);
+  }, [activeTab, aeroTable, alphaMin, alphaMax, currentBetaDeg, hasAeroTable]);
 
   const betaSlicePoints = useMemo(() => {
+    if (activeTab !== "aero") {
+      return [];
+    }
     if (!hasAeroTable) {
       return [
         { x: betaMin, coefficients: [0, 0, 0, 0, 0, 0] },
@@ -577,7 +625,7 @@ function SimMapOverlay({
       ];
     }
     return buildAeroSlice(aeroTable.rows, "beta", Number.isFinite(currentAlphaDeg) ? currentAlphaDeg : 0);
-  }, [aeroTable, betaMin, betaMax, currentAlphaDeg, hasAeroTable]);
+  }, [activeTab, aeroTable, betaMin, betaMax, currentAlphaDeg, hasAeroTable]);
 
   const alphaCurves = useMemo(() => buildAeroCurves(alphaSlicePoints, alphaMin, alphaMax), [alphaSlicePoints, alphaMin, alphaMax]);
   const betaCurves = useMemo(() => buildAeroCurves(betaSlicePoints, betaMin, betaMax), [betaSlicePoints, betaMin, betaMax]);
@@ -673,18 +721,12 @@ function SimMapOverlay({
                   attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                 />
                 <MapViewportController currentGeo={currentGeo} />
-                {simVehicles.map((vehicle) => {
-                  const coords = (vehicle.trailSamples ?? [])
-                    .filter((item) => Number.isFinite(item?.latDeg) && Number.isFinite(item?.lonDeg))
-                    .map((item) => [item.latDeg, item.lonDeg]);
-                  if (!coords.length) {
-                    return null;
-                  }
-                  const isSelected = vehicle.systemId === selectedVehicle?.systemId;
+                {vehicleTrailCoords.map((vehicle) => {
+                  const isSelected = vehicle.selected;
                   return (
                     <Polyline
                       key={`trail-${vehicle.systemId}`}
-                      positions={coords}
+                      positions={vehicle.coords}
                       pathOptions={{
                         color: isSelected ? "#22d3ee" : "#60a5fa",
                         weight: isSelected ? 3 : 2,

@@ -11,8 +11,8 @@ function TimelineControls({
   onPlayToggle,
   onScrub,
   onSpeedChange,
-  followCamera,
-  onFollowCameraChange,
+  cameraMode,
+  onCameraModeChange,
   onReset,
 }) {
   const handleScrub = (event) => {
@@ -55,13 +55,12 @@ function TimelineControls({
           </select>
         </label>
         <label>
-          <input
-            type="checkbox"
-            checked={followCamera}
-            onChange={(event) => onFollowCameraChange(event.target.checked)}
-            disabled={disabled}
-          />
-          Follow camera
+          Camera
+          <select value={cameraMode} onChange={(event) => onCameraModeChange(event.target.value)} disabled={disabled}>
+            <option value="free">Free moving</option>
+            <option value="follow-third">Follow 3rd person</option>
+            <option value="follow-first">First person</option>
+          </select>
         </label>
         <button type="button" className="ghost" onClick={onReset} disabled={disabled}>
           Reset
