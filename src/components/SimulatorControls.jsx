@@ -259,7 +259,7 @@ function SimulatorControls({
               onChange={(event) => onModelChange(event.target.value)}
               disabled={!hasSelectedVehicle}
             />
-            Bundled STL (public/tailsitter.stl)
+            Bundled STL (public/models/quad.stl)
           </label>
           <label>
             <input

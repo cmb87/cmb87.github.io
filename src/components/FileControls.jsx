@@ -65,7 +65,7 @@ function FileControls({
               checked={modelType === "stl"}
               onChange={(event) => onModelChange(event.target.value)}
             />
-            Bundled STL (public/tailsitter.stl)
+            Bundled STL (public/models/quad.stl)
           </label>
           <label>
             <input

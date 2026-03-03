@@ -1,4 +1,4 @@
-import { Euler, Quaternion } from "three";
+import { Euler, Quaternion, Vector3 } from "three";
 
 const tempQuatA = new Quaternion();
 const tempQuatB = new Quaternion();
@@ -7,6 +7,12 @@ const tempTelemetryA = new Quaternion();
 const tempTelemetryB = new Quaternion();
 const tempTelemetryOut = new Quaternion();
 const tempEuler = new Euler();
+const WORLD_UP = new Vector3(0, 0, -1);
+const tempForward = new Vector3();
+const tempRight = new Vector3();
+const tempForwardHoriz = new Vector3();
+const tempHorizonRight = new Vector3();
+const tempCross = new Vector3();
 
 function arrayToQuaternion(arr = []) {
   return tempQuatA.set(arr[0] ?? 0, arr[1] ?? 0, arr[2] ?? 0, arr[3] ?? 1);
@@ -120,6 +126,35 @@ export function formatSeconds(seconds) {
 
 export function toDegrees(value) {
   return value * (180 / Math.PI);
+}
+
+export function attitudeFromQuaternion(quaternion) {
+  if (!quaternion) {
+    return [0, 0, 0];
+  }
+
+  tempForward.set(1, 0, 0).applyQuaternion(quaternion);
+  tempRight.set(0, 1, 0).applyQuaternion(quaternion);
+
+  const pitch = Math.asin(Math.max(-1, Math.min(1, -tempForward.z)));
+
+  tempForwardHoriz.copy(tempForward);
+  tempForwardHoriz.z = 0;
+  const horizLenSq = tempForwardHoriz.lengthSq();
+
+  if (horizLenSq < 1e-8) {
+    return [0, pitch, 0];
+  }
+
+  tempForwardHoriz.multiplyScalar(1 / Math.sqrt(horizLenSq));
+  tempHorizonRight.copy(tempForwardHoriz).cross(WORLD_UP).normalize();
+
+  const rollCos = Math.max(-1, Math.min(1, tempHorizonRight.dot(tempRight)));
+  const rollSin = tempForward.dot(tempCross.copy(tempHorizonRight).cross(tempRight));
+  const roll = Math.atan2(rollSin, rollCos);
+  const yaw = Math.atan2(tempForwardHoriz.y, tempForwardHoriz.x);
+
+  return [roll, pitch, yaw];
 }
 
 export function formatDegrees(value) {

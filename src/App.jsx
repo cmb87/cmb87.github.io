@@ -9,7 +9,7 @@ import ArtificialHorizon from "./components/ArtificialHorizon";
 import SignalPlots from "./components/SignalPlots";
 import SimMapOverlay from "./components/SimMapOverlay";
 import { parseUlogFile } from "./lib/telemetryLoader";
-import { sampleAtTime } from "./lib/telemetryMath";
+import { attitudeFromQuaternion, sampleAtTime } from "./lib/telemetryMath";
 import { parseAeroTableText } from "./lib/aeroTable";
 import "./App.css";
 
@@ -148,11 +148,6 @@ function finiteOrNull(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function quaternionToEuler(quaternion) {
-  const euler = new Euler().setFromQuaternion(quaternion, "XYZ");
-  return [euler.x, euler.y, euler.z];
-}
-
 function toSimSample(payload, context, motionScale, tailsitterPitchCorrection = false) {
   const timeUsec = Number(payload?.time_usec);
   const positionNed = payload?.position_ned_m;
@@ -176,8 +171,8 @@ function toSimSample(payload, context, motionScale, tailsitterPitchCorrection = 
   if (tailsitterPitchCorrection) {
     displayTelemetryQuat.multiply(SIM_TAILSITTER_PITCH_CORRECTION_QUAT).normalize();
   }
-  const [roll, pitch, yaw] = quaternionToEuler(displayTelemetryQuat);
-  const [, , rawYaw] = quaternionToEuler(telemetryQuat);
+  const [roll, pitch, yaw] = attitudeFromQuaternion(displayTelemetryQuat);
+  const [, , rawYaw] = attitudeFromQuaternion(telemetryQuat);
 
   const renderQuat = NED_TO_SCENE_QUAT.clone().multiply(telemetryQuat);
 
