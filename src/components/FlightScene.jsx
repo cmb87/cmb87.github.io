@@ -526,7 +526,7 @@ export default function FlightScene({
         castShadow={enableShadows}
         shadow-mapSize={enableShadows ? [2048, 2048] : [512, 512]}
       />
-      <OrbitControls ref={controlsRef} maxDistance={160} minDistance={6} enablePan enableDamping dampingFactor={0.08} />
+      <OrbitControls ref={controlsRef} maxDistance={160} minDistance={1} enablePan enableDamping dampingFactor={0.08} />
       <gridHelper args={[400, 80, 0x2b5b88, 0x1d3b58]} position={[0, 0, 0]} />
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]} receiveShadow={enableShadows}>
         <planeGeometry args={[600, 600]} />

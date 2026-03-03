@@ -1352,12 +1352,12 @@ canvas {
 }
 
 .horizon-sky {
-  top: -60%;
+  top: -70%;
   background: linear-gradient(#0ea5e9, #38bdf8);
 }
 
 .horizon-ground {
-  top: 40%;
+  top: 50%;
   background: linear-gradient(#b45309, #d97706);
 }
 
@@ -1367,6 +1367,7 @@ canvas {
   left: 10%;
   right: 10%;
   height: 2px;
+  transform: translateY(-50%);
   background: rgba(248, 250, 252, 0.9);
 }
 
