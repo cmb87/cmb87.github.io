@@ -12,6 +12,8 @@ const CAMERA_MODE_FOLLOW_FIRST = "follow-first";
 const METERS_PER_DEG_LAT = 111320;
 const TILE_LOAD_RADIUS_METERS = 280;
 const TILE_UNLOAD_RADIUS_METERS = 460;
+const SPAWN_CUBE_DISTANCE_METERS = 300;
+const SPAWN_CUBE_LIMIT = 50;
 const DEFAULT_STL = "/models/quad.stl";
 const DEFAULT_MODEL_SCALE = 0.3;
 const qTailOffset = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), -Math.PI / 2);
@@ -390,6 +392,8 @@ export default function SatelliteScene({
   simVehicleMeshSettings = {},
   selectedSystemId = null,
   cameraMode = CAMERA_MODE_FREE,
+  spawnCubeRequest = 0,
+  simMotionScale = 1,
   onCanvasReady,
 }) {
   const [tileData, setTileData] = useState(null);
@@ -402,6 +406,9 @@ export default function SatelliteScene({
   const tileLoaderRef = useRef(new TextureLoader());
   const loadingIdsRef = useRef(new Set());
   const fallbackOriginsRef = useRef(new Map());
+  const lastSpawnRequestRef = useRef(0);
+  const cubeIdRef = useRef(1);
+  const [spawnedCubes, setSpawnedCubes] = useState([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -527,6 +534,45 @@ export default function SatelliteScene({
 
   const activeVehicle =
     geoVehicles.find((vehicle) => vehicle.systemId === selectedSystemId) ?? geoVehicles[0] ?? null;
+
+  useEffect(() => {
+    if (spawnCubeRequest <= lastSpawnRequestRef.current) {
+      return;
+    }
+    lastSpawnRequestRef.current = spawnCubeRequest;
+
+    const basePosition = activeVehicle?.scenePosition;
+    if (!Array.isArray(basePosition) || basePosition.length < 3) {
+      return;
+    }
+
+    const q = activeVehicle?.sample?.quaternion;
+    const forward = new Vector3(1, 0, 0);
+    if (Array.isArray(q) && q.length >= 4 && q.every((value) => Number.isFinite(value))) {
+      const quat = new Quaternion(q[0], q[1], q[2], q[3]).normalize();
+      forward.applyQuaternion(quat);
+    }
+    forward.y = 0;
+    if (forward.lengthSq() < 1e-6) {
+      forward.set(1, 0, 0);
+    } else {
+      forward.normalize();
+    }
+
+    const sceneDistance = SPAWN_CUBE_DISTANCE_METERS * (Number.isFinite(simMotionScale) ? simMotionScale : 1);
+    const position = [
+      basePosition[0] + forward.x * sceneDistance,
+      0,
+      basePosition[2] + forward.z * sceneDistance,
+    ];
+    const cubeId = cubeIdRef.current;
+    cubeIdRef.current += 1;
+
+    setSpawnedCubes((prev) => {
+      const next = [...prev, { id: cubeId, position }];
+      return next.length > SPAWN_CUBE_LIMIT ? next.slice(next.length - SPAWN_CUBE_LIMIT) : next;
+    });
+  }, [activeVehicle, simMotionScale, spawnCubeRequest]);
 
   const toScenePosition = useMemo(() => {
     if (!tileData) {
@@ -654,9 +700,18 @@ export default function SatelliteScene({
         <planeGeometry args={[5000, 5000]} />
         <meshStandardMaterial color="#0f172a" opacity={0.22} transparent />
       </mesh>
+      {spawnedCubes.map((cube) => (
+        <mesh key={cube.id} position={cube.position} castShadow>
+          <boxGeometry args={[8, 8, 8]} />
+          <meshStandardMaterial color="#ef4444" metalness={0.05} roughness={0.7} />
+        </mesh>
+      ))}
       {visibleTiles.length > 0 && <TilePlanes tiles={visibleTiles} />}
       <ExrEnvironment path={hdrPaths} />
       {geoVehicles.map((vehicle) => {
+          if (vehicle.systemId === activeVehicle?.systemId) {
+            return null;
+          }
           const modelType = vehicle.meshSettings?.modelType ?? "stl";
           const modelScale = Number.isFinite(vehicle.meshSettings?.modelScale)
             ? vehicle.meshSettings.modelScale

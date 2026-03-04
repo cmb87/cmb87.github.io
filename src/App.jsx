@@ -286,6 +286,7 @@ function App() {
   const [selectedSystemId, setSelectedSystemId] = useState(null);
   const [showInterVehicleLinks, setShowInterVehicleLinks] = useState(false);
   const [simMaxDistanceMeters, setSimMaxDistanceMeters] = useState("");
+  const [satelliteSpawnRequest, setSatelliteSpawnRequest] = useState(0);
   const [rotateTailsitter90, setRotateTailsitter90] = useState(false);
   const [simAeroFileName, setSimAeroFileName] = useState("");
   const [simAeroTable, setSimAeroTable] = useState(null);
@@ -991,6 +992,8 @@ function App() {
                   simVehicleMeshSettings={simVehicleMeshSettings}
                   selectedSystemId={selectedSystemId}
                   cameraMode={effectiveCameraMode}
+                  spawnCubeRequest={satelliteSpawnRequest}
+                  simMotionScale={SIM_MOTION_SCALE}
                   onCanvasReady={handleSceneCanvasReady}
                 />
               ) : (
@@ -1055,6 +1058,7 @@ function App() {
                 betaRange={simAeroBetaRange}
                 alphaRangeValid={simAeroAlphaRangeValid}
                 betaRangeValid={simAeroBetaRangeValid}
+                fpvPanel={<FpvStreamControls canvasElement={activeCanvasElement} cameraMode={effectiveCameraMode} />}
               />
             )}
             <div className="scene-center-hud">
@@ -1143,6 +1147,11 @@ function App() {
                     />
                     Show blue dotted links
                   </label>
+                  {isSatelliteSimMode && (
+                    <button type="button" onClick={() => setSatelliteSpawnRequest((prev) => prev + 1)}>
+                      Spawn red cube
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -1194,7 +1203,6 @@ function App() {
                 aeroFileName={simAeroFileName}
                 aeroError={simAeroError}
               />
-              <FpvStreamControls canvasElement={activeCanvasElement} cameraMode={effectiveCameraMode} />
             </>
           )}
         </aside>

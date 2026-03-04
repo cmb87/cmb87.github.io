@@ -3,10 +3,12 @@ import argparse
 import asyncio
 import contextlib
 import json
+import os
 import time
 from dataclasses import dataclass
 from typing import Optional
 
+import cv2
 from aiohttp import WSMsgType, web
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.sdp import candidate_from_sdp
@@ -19,10 +21,29 @@ class FrameStats:
     fps: float = 0.0
 
 
-def process_video_frame(frame_array, timestamp_sec: Optional[float]) -> None:
+@dataclass
+class FrameOutputConfig:
+    preview: bool = False
+    snapshot_dir: Optional[str] = None
+    snapshot_every: int = 30
+    window_name: str = "FPV"
+
+
+OUTPUT_CONFIG = FrameOutputConfig()
+
+
+def process_video_frame(frame_array, timestamp_sec: Optional[float], frame_count: int) -> None:
     _ = frame_array
     _ = timestamp_sec
+    if OUTPUT_CONFIG.preview:
+        cv2.imshow(OUTPUT_CONFIG.window_name, frame_array)
+        cv2.waitKey(1)
 
+    if OUTPUT_CONFIG.snapshot_dir and frame_count % max(1, OUTPUT_CONFIG.snapshot_every) == 0:
+        ts_ms = int((timestamp_sec or time.time()) * 1000)
+        file_name = f"frame_{frame_count:07d}_{ts_ms}.jpg"
+        out_path = os.path.join(OUTPUT_CONFIG.snapshot_dir, file_name)
+        cv2.imwrite(out_path, frame_array)
 
 async def consume_video_track(track, peer_id: str) -> None:
     stats = FrameStats(last_report_ts=time.time())
@@ -31,7 +52,7 @@ async def consume_video_track(track, peer_id: str) -> None:
         stats.count += 1
 
         frame_array = frame.to_ndarray(format="bgr24")
-        process_video_frame(frame_array, frame.time)
+        process_video_frame(frame_array, frame.time, stats.count)
 
         now = time.time()
         elapsed = now - stats.last_report_ts
@@ -206,11 +227,30 @@ def parse_args():
     parser = argparse.ArgumentParser(description="WebRTC FPV receiver for browser canvas stream")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9001)
+    parser.add_argument("--preview", action="store_true", help="Show live frames in an OpenCV window")
+    parser.add_argument("--snapshot-dir", default="", help="Directory to save JPEG snapshots")
+    parser.add_argument(
+        "--snapshot-every",
+        type=int,
+        default=30,
+        help="Save one snapshot every N frames (default: 30)",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+    snapshot_dir = args.snapshot_dir.strip() or None
+    if snapshot_dir:
+        os.makedirs(snapshot_dir, exist_ok=True)
+    OUTPUT_CONFIG.preview = bool(args.preview)
+    OUTPUT_CONFIG.snapshot_dir = snapshot_dir
+    OUTPUT_CONFIG.snapshot_every = max(1, int(args.snapshot_every))
+
     app = create_app()
     print(f"Starting WebRTC FPV server on ws://{args.host}:{args.port}/webrtc")
+    if OUTPUT_CONFIG.preview:
+        print("OpenCV preview enabled")
+    if OUTPUT_CONFIG.snapshot_dir:
+        print(f"Saving snapshots to {OUTPUT_CONFIG.snapshot_dir} every {OUTPUT_CONFIG.snapshot_every} frames")
     web.run_app(app, host=args.host, port=args.port)

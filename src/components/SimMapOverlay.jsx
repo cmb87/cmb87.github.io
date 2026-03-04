@@ -399,10 +399,17 @@ function SimMapOverlay({
   betaRange,
   alphaRangeValid,
   betaRangeValid,
+  fpvPanel = null,
 }) {
   const [activeTab, setActiveTab] = useState("map");
   const [visibleTrend, setVisibleTrend] = useState(new Set());
   const [visibleAero, setVisibleAero] = useState(new Set());
+
+  useEffect(() => {
+    if (!fpvPanel && activeTab === "fpv") {
+      setActiveTab("map");
+    }
+  }, [activeTab, fpvPanel]);
 
   const selectedVehicle = useMemo(
     () => simVehicles.find((vehicle) => vehicle.systemId === selectedSystemId) ?? simVehicles[0] ?? null,
@@ -691,6 +698,15 @@ function SimMapOverlay({
         >
           Aerodynamics
         </button>
+        {fpvPanel && (
+          <button
+            type="button"
+            className={`signal-tab ${activeTab === "fpv" ? "active" : ""}`}
+            onClick={() => setActiveTab("fpv")}
+          >
+            FPV Stream
+          </button>
+        )}
       </div>
 
       {activeTab === "map" && (
@@ -1068,6 +1084,8 @@ function SimMapOverlay({
           })}
         </>
       )}
+
+      {activeTab === "fpv" && fpvPanel}
     </div>
   );
 }

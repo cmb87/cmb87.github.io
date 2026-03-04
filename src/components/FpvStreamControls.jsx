@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const DEFAULT_SIGNALING_URL = "ws://127.0.0.1:9001/webrtc";
-const DEFAULT_WIDTH = 1280;
-const DEFAULT_HEIGHT = 720;
-const DEFAULT_FPS = 30;
+const DEFAULT_WIDTH = 960;
+const DEFAULT_HEIGHT = 540;
+const DEFAULT_FPS = 15;
+const DEFAULT_FIT_MODE = "cover";
 const MIN_DIMENSION = 160;
 const MAX_DIMENSION = 3840;
 const MIN_FPS = 1;
@@ -22,7 +23,7 @@ function clampNumber(value, min, max, fallback) {
   return Math.min(max, Math.max(min, parsed));
 }
 
-function drawScaledCanvas(sourceCanvas, targetCanvas, context2d) {
+function drawScaledCanvas(sourceCanvas, targetCanvas, context2d, fitMode = DEFAULT_FIT_MODE) {
   if (!sourceCanvas || !targetCanvas || !context2d) {
     return;
   }
@@ -36,14 +37,21 @@ function drawScaledCanvas(sourceCanvas, targetCanvas, context2d) {
     return;
   }
 
-  const scale = Math.min(tw / sw, th / sh);
+  if (fitMode === "stretch") {
+    context2d.drawImage(sourceCanvas, 0, 0, sw, sh, 0, 0, tw, th);
+    return;
+  }
+
+  const scale = fitMode === "contain" ? Math.min(tw / sw, th / sh) : Math.max(tw / sw, th / sh);
   const drawWidth = Math.max(1, Math.round(sw * scale));
   const drawHeight = Math.max(1, Math.round(sh * scale));
   const offsetX = Math.floor((tw - drawWidth) / 2);
   const offsetY = Math.floor((th - drawHeight) / 2);
 
-  context2d.fillStyle = "#000";
-  context2d.fillRect(0, 0, tw, th);
+  if (fitMode === "contain") {
+    context2d.fillStyle = "#000";
+    context2d.fillRect(0, 0, tw, th);
+  }
   context2d.drawImage(sourceCanvas, 0, 0, sw, sh, offsetX, offsetY, drawWidth, drawHeight);
 }
 
@@ -52,6 +60,7 @@ export default function FpvStreamControls({ canvasElement, cameraMode }) {
   const [captureWidthInput, setCaptureWidthInput] = useState(String(DEFAULT_WIDTH));
   const [captureHeightInput, setCaptureHeightInput] = useState(String(DEFAULT_HEIGHT));
   const [captureFpsInput, setCaptureFpsInput] = useState(String(DEFAULT_FPS));
+  const [fitMode, setFitMode] = useState(DEFAULT_FIT_MODE);
   const [status, setStatus] = useState("Idle");
   const [error, setError] = useState(null);
   const [streaming, setStreaming] = useState(false);
@@ -157,7 +166,7 @@ export default function FpvStreamControls({ canvasElement, cameraMode }) {
 
       captureCanvasRef.current = captureCanvas;
       captureContextRef.current = captureContext;
-      drawScaledCanvas(canvasElement, captureCanvas, captureContext);
+      drawScaledCanvas(canvasElement, captureCanvas, captureContext, fitMode);
 
       const frameIntervalMs = 1000 / captureFps;
       let lastDrawMs = 0;
@@ -168,7 +177,7 @@ export default function FpvStreamControls({ canvasElement, cameraMode }) {
           return;
         }
         if (lastDrawMs === 0 || nowMs - lastDrawMs >= frameIntervalMs) {
-          drawScaledCanvas(canvasElement, captureCanvas, captureContext);
+          drawScaledCanvas(canvasElement, captureCanvas, captureContext, fitMode);
           lastDrawMs = nowMs;
         }
         drawLoopFrameRef.current = requestAnimationFrame(step);
@@ -286,6 +295,7 @@ export default function FpvStreamControls({ canvasElement, cameraMode }) {
     captureFpsInput,
     captureHeightInput,
     captureWidthInput,
+    fitMode,
     signalingUrl,
     stopStreaming,
   ]);
@@ -347,6 +357,14 @@ export default function FpvStreamControls({ canvasElement, cameraMode }) {
               onChange={(event) => setCaptureFpsInput(event.target.value)}
               disabled={streaming}
             />
+          </label>
+          <label>
+            <span>Fit</span>
+            <select value={fitMode} onChange={(event) => setFitMode(event.target.value)} disabled={streaming}>
+              <option value="cover">Cover (no bars)</option>
+              <option value="contain">Contain (bars)</option>
+              <option value="stretch">Stretch (distort)</option>
+            </select>
           </label>
         </div>
       </div>
