@@ -34,8 +34,8 @@ Use the **Vehicle mesh** controls in either mode to switch between the bundled S
 - Artificial-horizon widget synced to the telemetry overlay, plus play/pause, scrub, and playback-speed controls.
 - Glassmorphic telemetry overlay showing time, attitude, altitude, airspeed, and E/U/-N velocity.
 - Bundled STL + selectable dummy body so the viewer works out-of-the-box.
-- Browser WebRTC streaming of the active scene canvas (including first-person camera) to a Python backend via websocket signaling.
-- FPV streaming controls for capture width, height, and FPS before starting WebRTC.
+- Browser websocket streaming of the active scene canvas (including first-person camera) to a Python backend.
+- FPV streaming controls for capture width, height, and FPS before starting a stream.
 
 ## Satellite tile mode setup
 
@@ -64,39 +64,40 @@ The loader also supports legacy paths (`/tiles/map.csv`, `/tiles/*.png`, `/hdr/*
 
 The satellite scene now lazy-loads nearby tiles around the active vehicle and unloads far-away tiles to keep GPU memory bounded.
 
-## WebRTC FPV stream signaling contract
+## WebSocket FPV stream contract
 
-The sidebar **FPV Stream** panel sends video from `canvas.captureStream(30)` and expects websocket signaling JSON:
+The sidebar **FPV Stream** panel sends JPEG frames over websocket and uses simple control JSON:
 
 - Browser -> backend:
-  - `{ "type": "offer", "sdp": "...", "meta": { "source": "fpv-canvas", "cameraMode": "follow-first", "width": 1280, "height": 720, "fps": 30 } }`
-  - `{ "type": "candidate", "candidate": { ... } }`
+  - `{ "type": "start", "meta": { "source": "fpv-canvas", "cameraMode": "follow-first", "width": 1280, "height": 720, "fps": 30, "format": "image/jpeg", "quality": 0.75 } }`
+  - binary websocket messages containing one JPEG-encoded frame each
+  - `{ "type": "stop" }`
 - Backend -> browser:
-  - `{ "type": "answer", "sdp": "..." }`
-  - `{ "type": "candidate", "candidate": { ... } }`
+  - `{ "type": "ack", "message": "stream-started" }`
+  - `{ "type": "ack", "message": "stream-stopped" }`
   - optional `{ "type": "error", "message": "..." }`
 
-This works well with Python `aiortc` + a lightweight websocket signaling server.
+The default stream endpoint is `ws://127.0.0.1:9001/fpv`.
 
-## Python WebRTC receiver example
+## Python websocket receiver example
 
-An example backend is included at `python/webrtc_fpv_server.py`.
+An example backend is included at `python/ws_fpv_server.py`.
 
 Install dependencies:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r python/requirements-webrtc.txt
+pip install -r python/requirements-ws.txt
 ```
 
 Run the backend:
 
 ```bash
-python python/webrtc_fpv_server.py --host 127.0.0.1 --port 9001
+python python/ws_fpv_server.py --host 127.0.0.1 --port 9001
 ```
 
-In the app sidebar **FPV Stream** panel, keep the default signaling URL `ws://127.0.0.1:9001/webrtc` and click **Start WebRTC**.
+In the app sidebar **FPV Stream** panel, keep the default websocket URL `ws://127.0.0.1:9001/fpv` and click **Start Stream**.
 
 ## Building for production
 

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-const DEFAULT_SIGNALING_URL = "ws://127.0.0.1:9001/webrtc";
+const DEFAULT_SIGNALING_URL = "ws://127.0.0.1:9001/fpv";
 const DEFAULT_WIDTH = 960;
 const DEFAULT_HEIGHT = 540;
 const DEFAULT_FPS = 15;
 const DEFAULT_FIT_MODE = "cover";
+const DEFAULT_JPEG_QUALITY = 0.75;
+const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
 const MIN_DIMENSION = 160;
 const MAX_DIMENSION = 3840;
 const MIN_FPS = 1;
@@ -65,13 +67,17 @@ export default function FpvStreamControls({ canvasElement, cameraMode }) {
   const [error, setError] = useState(null);
   const [streaming, setStreaming] = useState(false);
 
-  const peerRef = useRef(null);
   const socketRef = useRef(null);
-  const mediaRef = useRef(null);
   const captureCanvasRef = useRef(null);
   const captureContextRef = useRef(null);
   const drawLoopFrameRef = useRef(null);
   const drawLoopRunningRef = useRef(false);
+  const sendLoopTimerRef = useRef(null);
+  const sendLoopRunningRef = useRef(false);
+  const encodeInFlightRef = useRef(false);
+  const sentFramesRef = useRef(0);
+  const droppedFramesRef = useRef(0);
+  const lastStatReportMsRef = useRef(0);
 
   const stopDrawLoop = useCallback(() => {
     drawLoopRunningRef.current = false;
@@ -81,7 +87,36 @@ export default function FpvStreamControls({ canvasElement, cameraMode }) {
     }
   }, []);
 
+  const stopSendLoop = useCallback(() => {
+    sendLoopRunningRef.current = false;
+    encodeInFlightRef.current = false;
+    if (sendLoopTimerRef.current != null) {
+      clearTimeout(sendLoopTimerRef.current);
+      sendLoopTimerRef.current = null;
+    }
+  }, []);
+
+  const maybeReportStats = useCallback((captureWidth, captureHeight, captureFps) => {
+    const nowMs = Date.now();
+    if (!lastStatReportMsRef.current) {
+      lastStatReportMsRef.current = nowMs;
+      return;
+    }
+
+    if (nowMs - lastStatReportMsRef.current < 1000) {
+      return;
+    }
+
+    const sent = sentFramesRef.current;
+    const dropped = droppedFramesRef.current;
+    setStatus(`Streaming ${captureWidth}x${captureHeight} @ ${captureFps} fps (sent ${sent}/s, dropped ${dropped}/s)`);
+    sentFramesRef.current = 0;
+    droppedFramesRef.current = 0;
+    lastStatReportMsRef.current = nowMs;
+  }, []);
+
   const stopStreaming = useCallback(() => {
+    stopSendLoop();
     stopDrawLoop();
 
     const socket = socketRef.current;
@@ -91,7 +126,7 @@ export default function FpvStreamControls({ canvasElement, cameraMode }) {
           socket.send(JSON.stringify({ type: "stop" }));
         }
       } catch {
-        // Ignore signaling shutdown errors.
+        // Ignore shutdown errors.
       }
       socket.onopen = null;
       socket.onmessage = null;
@@ -103,38 +138,20 @@ export default function FpvStreamControls({ canvasElement, cameraMode }) {
       socketRef.current = null;
     }
 
-    const peer = peerRef.current;
-    if (peer) {
-      peer.onicecandidate = null;
-      peer.onconnectionstatechange = null;
-      peer.close();
-      peerRef.current = null;
-    }
-
-    const media = mediaRef.current;
-    if (media) {
-      for (const track of media.getTracks()) {
-        track.stop();
-      }
-      mediaRef.current = null;
-    }
-
     captureContextRef.current = null;
     captureCanvasRef.current = null;
+    sentFramesRef.current = 0;
+    droppedFramesRef.current = 0;
+    lastStatReportMsRef.current = 0;
     setStreaming(false);
     setStatus("Stopped");
-  }, [stopDrawLoop]);
+  }, [stopDrawLoop, stopSendLoop]);
 
   const startStreaming = useCallback(async () => {
     setError(null);
 
     if (!canvasElement) {
       setError("No active scene canvas to capture.");
-      return;
-    }
-
-    if (typeof canvasElement.captureStream !== "function") {
-      setError("Browser does not support canvas captureStream().");
       return;
     }
 
@@ -184,71 +201,110 @@ export default function FpvStreamControls({ canvasElement, cameraMode }) {
       };
       drawLoopFrameRef.current = requestAnimationFrame(step);
 
-      setStatus("Capturing canvas stream ...");
-      const stream = captureCanvas.captureStream(captureFps);
-      mediaRef.current = stream;
-
-      const peer = new RTCPeerConnection({ iceServers: [] });
-      peerRef.current = peer;
-
-      for (const track of stream.getTracks()) {
-        peer.addTrack(track, stream);
-      }
+      setStatus("Connecting websocket ...");
 
       const socket = new WebSocket(signalingUrl.trim());
       socketRef.current = socket;
 
-      peer.onicecandidate = (event) => {
-        if (!event.candidate || socket.readyState !== WebSocket.OPEN) {
-          return;
-        }
-        socket.send(
-          JSON.stringify({
-            type: "candidate",
-            candidate: event.candidate,
-          }),
-        );
-      };
-
-      peer.onconnectionstatechange = () => {
-        const state = peer.connectionState;
-        if (state === "connected") {
-          setStatus(`Streaming ${captureWidth}x${captureHeight} @ ${captureFps} fps`);
-          setStreaming(true);
-          return;
-        }
-        if (state === "failed" || state === "disconnected" || state === "closed") {
-          setStatus(`Peer ${state}`);
-          setStreaming(false);
-        }
-      };
-
       socket.onopen = async () => {
         try {
-          setStatus("Creating offer ...");
-          const offer = await peer.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
-          await peer.setLocalDescription(offer);
           socket.send(
             JSON.stringify({
-              type: "offer",
-              sdp: offer.sdp,
+              type: "start",
               meta: {
                 source: "fpv-canvas",
                 cameraMode,
                 width: captureWidth,
                 height: captureHeight,
                 fps: captureFps,
+                format: "image/jpeg",
+                quality: DEFAULT_JPEG_QUALITY,
               },
             }),
           );
-          setStatus("Offer sent. Waiting for answer ...");
+
+          sentFramesRef.current = 0;
+          droppedFramesRef.current = 0;
+          lastStatReportMsRef.current = Date.now();
+          setStreaming(true);
+          setStatus(`Streaming ${captureWidth}x${captureHeight} @ ${captureFps} fps`);
+
+          const frameIntervalMs = Math.max(1, Math.round(1000 / captureFps));
+          sendLoopRunningRef.current = true;
+
+          const sendNextFrame = () => {
+            if (!sendLoopRunningRef.current) {
+              return;
+            }
+
+            const currentSocket = socketRef.current;
+            const captureTarget = captureCanvasRef.current;
+            const captureCtx = captureContextRef.current;
+            if (
+              !currentSocket
+              || currentSocket.readyState !== WebSocket.OPEN
+              || !captureTarget
+              || !captureCtx
+            ) {
+              sendLoopTimerRef.current = setTimeout(sendNextFrame, frameIntervalMs);
+              return;
+            }
+
+            if (encodeInFlightRef.current) {
+              sendLoopTimerRef.current = setTimeout(sendNextFrame, frameIntervalMs);
+              return;
+            }
+
+            if (currentSocket.bufferedAmount > MAX_BUFFERED_BYTES) {
+              droppedFramesRef.current += 1;
+              maybeReportStats(captureWidth, captureHeight, captureFps);
+              sendLoopTimerRef.current = setTimeout(sendNextFrame, frameIntervalMs);
+              return;
+            }
+
+            encodeInFlightRef.current = true;
+            drawScaledCanvas(canvasElement, captureTarget, captureCtx, fitMode);
+            captureTarget.toBlob(
+              (blob) => {
+                try {
+                  const activeSocket = socketRef.current;
+                  if (!blob || !activeSocket || activeSocket.readyState !== WebSocket.OPEN) {
+                    droppedFramesRef.current += 1;
+                    return;
+                  }
+
+                  if (activeSocket.bufferedAmount > MAX_BUFFERED_BYTES) {
+                    droppedFramesRef.current += 1;
+                    return;
+                  }
+
+                  activeSocket.send(blob);
+                  sentFramesRef.current += 1;
+                } finally {
+                  maybeReportStats(captureWidth, captureHeight, captureFps);
+                  encodeInFlightRef.current = false;
+                  if (sendLoopRunningRef.current) {
+                    sendLoopTimerRef.current = setTimeout(sendNextFrame, frameIntervalMs);
+                  }
+                }
+              },
+              "image/jpeg",
+              DEFAULT_JPEG_QUALITY,
+            );
+          };
+
+          sendLoopTimerRef.current = setTimeout(sendNextFrame, frameIntervalMs);
         } catch (err) {
-          setError(toMessageError(err, "Failed to create/send offer"));
+          setError(toMessageError(err, "Failed to start websocket stream"));
           stopStreaming();
         }
       };
 
       socket.onmessage = async (event) => {
+        if (typeof event.data !== "string") {
+          return;
+        }
+
         let message;
         try {
           message = JSON.parse(event.data);
@@ -256,37 +312,27 @@ export default function FpvStreamControls({ canvasElement, cameraMode }) {
           return;
         }
 
-        try {
-          if (message.type === "answer" && message.sdp) {
-            await peer.setRemoteDescription({ type: "answer", sdp: message.sdp });
-            setStatus("Answer received. Establishing media ...");
-            return;
-          }
-          if (message.type === "candidate" && message.candidate) {
-            await peer.addIceCandidate(message.candidate);
-            return;
-          }
-          if (message.type === "error") {
-            throw new Error(message.message || "Signaling server error");
-          }
-        } catch (err) {
-          setError(toMessageError(err, "Failed to process signaling message"));
+        if (message.type === "error") {
+          setError(message.message || "Backend websocket error");
           stopStreaming();
+          return;
+        }
+
+        if (message.type === "ack") {
+          setStatus(`Connected. Streaming ${captureWidth}x${captureHeight} @ ${captureFps} fps`);
         }
       };
 
       socket.onerror = () => {
-        setError("WebSocket signaling error");
+        setError("WebSocket stream error");
       };
 
       socket.onclose = () => {
-        if (peer.connectionState !== "connected") {
-          setStatus("Signaling channel closed");
-          setStreaming(false);
-        }
+        setStreaming(false);
+        setStatus("WebSocket closed");
       };
     } catch (err) {
-      setError(toMessageError(err, "Unable to start WebRTC stream"));
+      setError(toMessageError(err, "Unable to start WebSocket stream"));
       stopStreaming();
     }
   }, [
@@ -296,6 +342,7 @@ export default function FpvStreamControls({ canvasElement, cameraMode }) {
     captureHeightInput,
     captureWidthInput,
     fitMode,
+    maybeReportStats,
     signalingUrl,
     stopStreaming,
   ]);
@@ -305,10 +352,10 @@ export default function FpvStreamControls({ canvasElement, cameraMode }) {
   return (
     <div className="panel panel-fpv-stream">
       <h2>FPV Stream</h2>
-      <p className="panel-subtitle">Stream the active scene canvas to a Python WebRTC backend.</p>
+      <p className="panel-subtitle">Stream the active scene canvas to a Python websocket backend.</p>
 
       <div className="panel-block">
-        <span className="label">Signaling websocket</span>
+        <span className="label">Stream websocket</span>
         <input
           type="text"
           value={signalingUrl}
@@ -371,7 +418,7 @@ export default function FpvStreamControls({ canvasElement, cameraMode }) {
 
       <div className="control-row fpv-stream-actions">
         <button type="button" onClick={startStreaming} disabled={streaming || !canvasElement}>
-          Start WebRTC
+          Start Stream
         </button>
         <button type="button" className="ghost" onClick={stopStreaming} disabled={!streaming}>
           Stop
