@@ -1,6 +1,5 @@
 function FileControls({
   onLogSelected,
-  onLoadSample,
   onClear,
   status,
   error,
@@ -45,9 +44,6 @@ function FileControls({
         </label>
         <div className="input-meta">{ulogName || "No log selected"}</div>
         <div className="control-row">
-          <button type="button" onClick={onLoadSample} className="ghost" disabled={loading}>
-            Load sample flight
-          </button>
           <button type="button" onClick={onClear} disabled={loading}>
             Clear
           </button>

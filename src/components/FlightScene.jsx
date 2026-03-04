@@ -539,6 +539,7 @@ export default function FlightScene({
   selectedSystemId = null,
   showInterVehicleLinks = false,
   maxInterVehicleDistanceMeters = null,
+  onCanvasReady,
 }) {
   const stlPath = modelType === "upload" && customModelUrl ? customModelUrl : DEFAULT_STL;
   const controlsRef = useRef();
@@ -550,8 +551,15 @@ export default function FlightScene({
   const selectedSimSample =
     simVehicles.find((vehicle) => vehicle.systemId === selectedSystemId)?.latestSample ?? simVehicles[0]?.latestSample ?? null;
 
+  useEffect(() => () => onCanvasReady?.(null), [onCanvasReady]);
+
   return (
-    <Canvas shadows={enableShadows} camera={{ position: CAMERA_POSITION, fov: 50 }} dpr={simMode ? [1, 1.2] : [1, 1.45]}>
+    <Canvas
+      shadows={enableShadows}
+      camera={{ position: CAMERA_POSITION, fov: 50 }}
+      dpr={simMode ? [1, 1.2] : [1, 1.45]}
+      onCreated={({ gl }) => onCanvasReady?.(gl.domElement)}
+    >
       <color attach="background" args={["#050912"]} />
       <ambientLight intensity={0.42} />
       <directionalLight

@@ -913,12 +913,42 @@ canvas {
   position: relative;
 }
 
+.sidebar > * + * {
+  margin-top: 1rem;
+}
+
 .panel {
   background: rgba(15, 23, 42, 0.95);
   border-radius: 1.25rem;
   padding: clamp(1rem, 2vw, 1.5rem);
   border: 1px solid rgba(94, 234, 212, 0.2);
   box-shadow: 0 25px 60px rgba(2, 6, 23, 0.65);
+}
+
+.panel-fpv-stream {
+  border-color: rgba(56, 189, 248, 0.32);
+}
+
+.fpv-stream-actions {
+  margin-bottom: 0.3rem;
+}
+
+.fpv-stream-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.fpv-stream-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  color: #cbd5f5;
+  font-size: 0.78rem;
+}
+
+.fpv-stream-grid input {
+  width: 100%;
 }
 
 .panel h2 {

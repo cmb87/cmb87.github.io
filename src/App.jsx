@@ -8,12 +8,13 @@ import TelemetryOverlay from "./components/TelemetryOverlay";
 import ArtificialHorizon from "./components/ArtificialHorizon";
 import SignalPlots from "./components/SignalPlots";
 import SimMapOverlay from "./components/SimMapOverlay";
+import SatelliteScene from "./components/SatelliteScene";
+import FpvStreamControls from "./components/FpvStreamControls";
 import { parseUlogFile } from "./lib/telemetryLoader";
 import { attitudeFromQuaternion, sampleAtTime } from "./lib/telemetryMath";
 import { parseAeroTableText } from "./lib/aeroTable";
 import "./App.css";
 
-const SAMPLE_LOG_PATH = "/sample-flight.ulg";
 const ACTUATOR_LABEL_OPTIONS = [
   "rudder",
   "elevon",
@@ -44,6 +45,8 @@ const DEFAULT_AERO_BETA_MIN = -20;
 const DEFAULT_AERO_BETA_MAX = 20;
 const SIM_MOTION_SCALE = 0.3;
 const DEFAULT_CAMERA_MODE = "free";
+const CAMERA_MODE_FOLLOW_FIRST = "follow-first";
+const DEFAULT_SIM_SCENE_MODE = "3d";
 const SIM_TRAIL_POINTS = 240;
 const SIM_UI_UPDATE_INTERVAL_MS = 50;
 const NED_TO_SCENE_QUAT = new Quaternion().setFromRotationMatrix(
@@ -272,6 +275,7 @@ function App() {
 
   const [playing, setPlaying] = useState(false);
   const [cameraMode, setCameraMode] = useState(DEFAULT_CAMERA_MODE);
+  const [simSceneMode, setSimSceneMode] = useState(DEFAULT_SIM_SCENE_MODE);
   const [time, setTime] = useState(0);
   const [speed, setSpeed] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -299,8 +303,13 @@ function App() {
   const simUiFlushTimeoutRef = useRef(null);
   const simLastUiFlushMsRef = useRef(0);
   const nextSimConnectionIdRef = useRef(2);
+  const [activeCanvasElement, setActiveCanvasElement] = useState(null);
 
   const currentSample = useMemo(() => sampleAtTime(samples, time), [samples, time]);
+
+  const handleSceneCanvasReady = useCallback((canvasElement) => {
+    setActiveCanvasElement(canvasElement ?? null);
+  }, []);
 
   useEffect(() => {
     if (!playing || duration <= 0) {
@@ -382,28 +391,6 @@ function App() {
     },
     [resetPlayback],
   );
-
-  const handleSampleLoad = useCallback(async () => {
-    resetPlayback();
-    setStatus("Fetching bundled sample flight …");
-    setError(null);
-    setLoading(true);
-    try {
-      const response = await fetch(SAMPLE_LOG_PATH);
-      if (!response.ok) {
-        throw new Error(`Failed to download sample (HTTP ${response.status})`);
-      }
-      const blob = await response.blob();
-      const file = new File([blob], "sample-flight.ulg", { type: blob.type || "application/octet-stream" });
-      await handleUlogSelection(file);
-    } catch (err) {
-      console.error(err);
-      setStatus("Unable to load sample flight");
-      setError(err?.message ?? String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [handleUlogSelection, resetPlayback]);
 
   const clearTelemetry = useCallback(() => {
     resetPlayback();
@@ -907,13 +894,27 @@ function App() {
     : [DEFAULT_AERO_BETA_MIN, DEFAULT_AERO_BETA_MAX];
 
   const sceneSample = activeView === "log" ? currentSample : selectedSimSample;
+  const isSatelliteSimMode = activeView === "sim" && simSceneMode === "satellite";
+  const effectiveCameraMode = isSatelliteSimMode ? CAMERA_MODE_FOLLOW_FIRST : cameraMode;
+
+  useEffect(() => {
+    if (isSatelliteSimMode && cameraMode !== CAMERA_MODE_FOLLOW_FIRST) {
+      setCameraMode(CAMERA_MODE_FOLLOW_FIRST);
+    }
+  }, [cameraMode, isSatelliteSimMode]);
 
   return (
     <div className="app-shell">
       <header className="app-header">
         <div>
           <h1>PX4 Flight Visualizer</h1>
-          <p>{activeView === "log" ? "Replay PX4 ULog telemetry" : "Live simulator websocket telemetry"}</p>
+          <p>
+            {activeView === "log"
+              ? "Replay PX4 ULog telemetry"
+              : simSceneMode === "satellite"
+                ? "Live simulator telemetry over geo satellite tiles"
+                : "Live simulator websocket telemetry"}
+          </p>
         </div>
         <div className="view-tabs" role="tablist" aria-label="Viewer modes">
           <button
@@ -984,21 +985,32 @@ function App() {
         <section className="scene-panel">
           <div className="scene-wrapper">
             <Suspense fallback={null}>
-              <FlightScene
-                samples={samples}
-                activeSample={activeView === "log" ? currentSample : selectedSimSample}
-                modelType={modelType}
-                modelScale={modelScale}
-                customModelUrl={customStlUrl}
-                cameraMode={cameraMode}
-                simMode={activeView === "sim"}
-                rotateTailsitter90={rotateTailsitter90}
-                simVehicles={simVehicleList}
-                simVehicleMeshSettings={simVehicleMeshSettings}
-                selectedSystemId={selectedSystemId}
-                showInterVehicleLinks={showInterVehicleLinks}
-                maxInterVehicleDistanceMeters={simMaxDistanceThreshold}
-              />
+              {activeView === "sim" && simSceneMode === "satellite" ? (
+                <SatelliteScene
+                  simVehicles={simVehicleList}
+                  simVehicleMeshSettings={simVehicleMeshSettings}
+                  selectedSystemId={selectedSystemId}
+                  cameraMode={effectiveCameraMode}
+                  onCanvasReady={handleSceneCanvasReady}
+                />
+              ) : (
+                <FlightScene
+                  samples={samples}
+                  activeSample={activeView === "log" ? currentSample : selectedSimSample}
+                  modelType={modelType}
+                  modelScale={modelScale}
+                  customModelUrl={customStlUrl}
+                  cameraMode={effectiveCameraMode}
+                  simMode={activeView === "sim"}
+                  rotateTailsitter90={rotateTailsitter90}
+                  simVehicles={simVehicleList}
+                  simVehicleMeshSettings={simVehicleMeshSettings}
+                  selectedSystemId={selectedSystemId}
+                  showInterVehicleLinks={showInterVehicleLinks}
+                  maxInterVehicleDistanceMeters={simMaxDistanceThreshold}
+                  onCanvasReady={handleSceneCanvasReady}
+                />
+              )}
             </Suspense>
             {activeView === "log" && !currentSample && <div className="scene-empty-hint">Load a PX4 .ulg to start playback.</div>}
             {activeView === "sim" && !selectedSimSample && (
@@ -1099,11 +1111,28 @@ function App() {
                 </span>
                 <div className="sim-live-toggles">
                   <label>
+                    Scene
+                    <select value={simSceneMode} onChange={(event) => setSimSceneMode(event.target.value)}>
+                      <option value="3d">3D flight</option>
+                      <option value="satellite">Satellite tiles</option>
+                    </select>
+                  </label>
+                  <label>
                     Camera
-                    <select value={cameraMode} onChange={(event) => setCameraMode(event.target.value)}>
-                      <option value="free">Free moving</option>
-                      <option value="follow-third">Follow 3rd person</option>
-                      <option value="follow-first">First person</option>
+                    <select
+                      value={effectiveCameraMode}
+                      onChange={(event) => setCameraMode(event.target.value)}
+                      disabled={isSatelliteSimMode}
+                    >
+                      {isSatelliteSimMode ? (
+                        <option value="follow-first">First person</option>
+                      ) : (
+                        <>
+                          <option value="free">Free moving</option>
+                          <option value="follow-third">Follow 3rd person</option>
+                          <option value="follow-first">First person</option>
+                        </>
+                      )}
                     </select>
                   </label>
                   <label>
@@ -1122,10 +1151,9 @@ function App() {
 
         <aside className="sidebar">
           {activeView === "log" ? (
-            <FileControls
-              onLogSelected={handleUlogSelection}
-              onLoadSample={handleSampleLoad}
-              onClear={clearTelemetry}
+              <FileControls
+                onLogSelected={handleUlogSelection}
+                onClear={clearTelemetry}
               status={status}
               error={error}
               loading={loading}
@@ -1140,31 +1168,34 @@ function App() {
               customStlName={customStlName}
             />
           ) : (
-            <SimulatorControls
-              connections={simConnections}
-              onConnectionFieldChange={handleSimConnectionFieldChange}
-              onAddConnection={handleAddSimConnection}
-              onRemoveConnection={handleRemoveSimConnection}
-              onConnectConnection={handleSimConnectConnection}
-              onDisconnectConnection={handleSimDisconnectConnection}
-              vehicles={simVehicleList}
-              selectedSystemId={selectedSystemId}
-              onSelectedSystemIdChange={setSelectedSystemId}
-              status={simSummary}
-              modelType={selectedSimVehicleMesh.modelType}
-              onModelChange={handleSelectedSimModelTypeChange}
-              modelScale={selectedSimVehicleMesh.modelScale}
-              onModelScaleChange={handleSelectedSimModelScaleChange}
-              rotateTailsitter90={selectedSimVehicleMesh.rotateTailsitter90}
-              onRotateTailsitter90Change={handleSelectedSimRotate90Change}
-              tailsitterPitchCorrection={selectedSimVehicleMesh.tailsitterPitchCorrection}
-              onTailsitterPitchCorrectionChange={handleSelectedSimPitchCorrectionChange}
-              onCustomStlSelected={handleSelectedSimCustomStlSelected}
-              customStlName={selectedSimVehicleMesh.customStlName}
-              onAeroFileSelected={handleSimAeroFileSelected}
-              aeroFileName={simAeroFileName}
-              aeroError={simAeroError}
-            />
+            <>
+              <SimulatorControls
+                connections={simConnections}
+                onConnectionFieldChange={handleSimConnectionFieldChange}
+                onAddConnection={handleAddSimConnection}
+                onRemoveConnection={handleRemoveSimConnection}
+                onConnectConnection={handleSimConnectConnection}
+                onDisconnectConnection={handleSimDisconnectConnection}
+                vehicles={simVehicleList}
+                selectedSystemId={selectedSystemId}
+                onSelectedSystemIdChange={setSelectedSystemId}
+                status={simSummary}
+                modelType={selectedSimVehicleMesh.modelType}
+                onModelChange={handleSelectedSimModelTypeChange}
+                modelScale={selectedSimVehicleMesh.modelScale}
+                onModelScaleChange={handleSelectedSimModelScaleChange}
+                rotateTailsitter90={selectedSimVehicleMesh.rotateTailsitter90}
+                onRotateTailsitter90Change={handleSelectedSimRotate90Change}
+                tailsitterPitchCorrection={selectedSimVehicleMesh.tailsitterPitchCorrection}
+                onTailsitterPitchCorrectionChange={handleSelectedSimPitchCorrectionChange}
+                onCustomStlSelected={handleSelectedSimCustomStlSelected}
+                customStlName={selectedSimVehicleMesh.customStlName}
+                onAeroFileSelected={handleSimAeroFileSelected}
+                aeroFileName={simAeroFileName}
+                aeroError={simAeroError}
+              />
+              <FpvStreamControls canvasElement={activeCanvasElement} cameraMode={effectiveCameraMode} />
+            </>
           )}
         </aside>
       </main>

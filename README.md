@@ -16,7 +16,7 @@ npm run dev
 
 Open the printed local URL (default `http://localhost:5173`) and choose a tab in the header:
 
-- **Log Analyzer**: load your own `.ulg` via the sidebar, or click **Load sample flight** to use `public/sample-flight.ulg`.
+- **Log Analyzer**: load your own `.ulg` via the sidebar.
 - **Simulator**: set websocket host/port (defaults `127.0.0.1:8765`) and click **Connect**.
 
 Use the **Vehicle mesh** controls in either mode to switch between the bundled STL (`public/tailsitter.stl`), dummy cubes, or an uploaded `.stl`.
@@ -28,11 +28,75 @@ Use the **Vehicle mesh** controls in either mode to switch between the bundled S
 - Parses `vehicle_attitude` and `vehicle_local_position` topics in-browser via `@foxglove/ulog`.
 - Converts PX4 NED coordinates to the scene frame, centers the track, and animates the STL with quaternion slerp interpolation.
 - Streams simulator ground-truth telemetry over websocket (default `ws://127.0.0.1:8765`) for live visualization.
+- Simulator scene toggle between the existing 3D flight view and a geo-referenced satellite tile scene (`/public/satellite/tiles`).
 - Tailsitter-aware orientation offset so pitch `0°` renders the aircraft standing nose-up.
 - Ground plane + tracked path for visual context and orientation aids.
 - Artificial-horizon widget synced to the telemetry overlay, plus play/pause, scrub, and playback-speed controls.
 - Glassmorphic telemetry overlay showing time, attitude, altitude, airspeed, and E/U/-N velocity.
-- Bundled STL + demo log so the viewer works out-of-the-box (plus a selectable dummy body for debugging).
+- Bundled STL + selectable dummy body so the viewer works out-of-the-box.
+- Browser WebRTC streaming of the active scene canvas (including first-person camera) to a Python backend via websocket signaling.
+- FPV streaming controls for capture width, height, and FPS before starting WebRTC.
+
+## Satellite tile mode setup
+
+The simulator supports a second renderer that uses pre-downloaded zoom-19 tiles + HDR environment.
+
+Expected asset layout (preferred):
+
+```text
+public/
+  satellite/
+    tiles/
+      map.csv
+      tile_z19_x..._y....png
+    hdr/
+      kloppenheim_07_puresky_1k.exr
+```
+
+If your source app is at `/home/cp/projects-temp/20_uav/03-simulation/project-visnav/app/map-app-satelitte`, copy:
+
+- `/public/tiles/*` -> `this-repo/public/satellite/tiles/`
+- `/public/hdr/kloppenheim_07_puresky_1k.exr` -> `this-repo/public/satellite/hdr/`
+
+Then run `npm run dev`, open **Simulator**, and switch **Scene** to **Satellite tiles**.
+
+The loader also supports legacy paths (`/tiles/map.csv`, `/tiles/*.png`, `/hdr/*.exr`) as a fallback.
+
+The satellite scene now lazy-loads nearby tiles around the active vehicle and unloads far-away tiles to keep GPU memory bounded.
+
+## WebRTC FPV stream signaling contract
+
+The sidebar **FPV Stream** panel sends video from `canvas.captureStream(30)` and expects websocket signaling JSON:
+
+- Browser -> backend:
+  - `{ "type": "offer", "sdp": "...", "meta": { "source": "fpv-canvas", "cameraMode": "follow-first", "width": 1280, "height": 720, "fps": 30 } }`
+  - `{ "type": "candidate", "candidate": { ... } }`
+- Backend -> browser:
+  - `{ "type": "answer", "sdp": "..." }`
+  - `{ "type": "candidate", "candidate": { ... } }`
+  - optional `{ "type": "error", "message": "..." }`
+
+This works well with Python `aiortc` + a lightweight websocket signaling server.
+
+## Python WebRTC receiver example
+
+An example backend is included at `python/webrtc_fpv_server.py`.
+
+Install dependencies:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r python/requirements-webrtc.txt
+```
+
+Run the backend:
+
+```bash
+python python/webrtc_fpv_server.py --host 127.0.0.1 --port 9001
+```
+
+In the app sidebar **FPV Stream** panel, keep the default signaling URL `ws://127.0.0.1:9001/webrtc` and click **Start WebRTC**.
 
 ## Building for production
 
