@@ -116,7 +116,7 @@ function SimulatorControls({
                   </button>
                 </div>
                 <div className="sim-connection-actions">
-                    {connection.connected ? (
+                    {connection.shouldReconnect ? (
                       <button type="button" onClick={() => onDisconnectConnection(connection.id)}>
                         Disconnect
                       </button>
@@ -135,26 +135,26 @@ function SimulatorControls({
                   <div className="ws-input-grid sim-connection-inputs">
                     <label>
                       <span>Host</span>
-                      <input
-                        type="text"
-                        value={connection.host}
-                        onChange={(event) => onConnectionFieldChange(connection.id, "host", event.target.value)}
-                        placeholder="127.0.0.1"
-                        disabled={connection.connected || connection.connecting}
-                      />
-                    </label>
+                        <input
+                          type="text"
+                          value={connection.host}
+                          onChange={(event) => onConnectionFieldChange(connection.id, "host", event.target.value)}
+                          placeholder="127.0.0.1"
+                          disabled={connection.shouldReconnect}
+                        />
+                      </label>
                     <label>
                       <span>Port</span>
-                      <input
-                        type="number"
-                        value={connection.port}
-                        onChange={(event) => onConnectionFieldChange(connection.id, "port", event.target.value)}
-                        min="1"
-                        max="65535"
-                        placeholder="8765"
-                        disabled={connection.connected || connection.connecting}
-                      />
-                    </label>
+                        <input
+                          type="number"
+                          value={connection.port}
+                          onChange={(event) => onConnectionFieldChange(connection.id, "port", event.target.value)}
+                          min="1"
+                          max="65535"
+                          placeholder="8765"
+                          disabled={connection.shouldReconnect}
+                        />
+                      </label>
                   </div>
                 )}
 

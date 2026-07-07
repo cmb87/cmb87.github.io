@@ -78,6 +78,7 @@ function createSimConnection(id, host = DEFAULT_SIM_HOST, port = DEFAULT_SIM_POR
     port,
     connected: false,
     connecting: false,
+    shouldReconnect: false,
     frameCount: 0,
     status: "Disconnected",
     error: null,
@@ -303,6 +304,8 @@ function App() {
   const simVehiclesBySystemIdRef = useRef({});
   const simUiFlushTimeoutRef = useRef(null);
   const simLastUiFlushMsRef = useRef(0);
+  const simReconnectTimeoutsRef = useRef(new Map());
+  const simConnectionsRef = useRef(simConnections);
   const nextSimConnectionIdRef = useRef(2);
   const [activeCanvasElement, setActiveCanvasElement] = useState(null);
 
@@ -419,6 +422,10 @@ function App() {
       }
     };
   }, [customStlUrl]);
+
+  useEffect(() => {
+    simConnectionsRef.current = simConnections;
+  }, [simConnections]);
 
   useEffect(() => {
     simVehicleMeshSettingsRef.current = simVehicleMeshSettings;
@@ -626,6 +633,14 @@ function App() {
     flushSimVehiclesToState();
   }, [flushSimVehiclesToState]);
 
+  const clearSimReconnectTimeout = useCallback((connectionId) => {
+    const timeoutId = simReconnectTimeoutsRef.current.get(connectionId);
+    if (timeoutId != null) {
+      clearTimeout(timeoutId);
+      simReconnectTimeoutsRef.current.delete(connectionId);
+    }
+  }, []);
+
   const closeSimConnectionSocket = useCallback((connectionId) => {
     const socket = simSocketsRef.current.get(connectionId);
     if (socket) {
@@ -653,47 +668,14 @@ function App() {
     setConnectionState(connectionId, () => ({ [field]: value }));
   }, [setConnectionState]);
 
-  const handleAddSimConnection = useCallback(() => {
-    const nextId = nextSimConnectionIdRef.current;
-    nextSimConnectionIdRef.current += 1;
-    setSimConnections((prev) => {
-      const lastPort = prev.length ? prev[prev.length - 1].port : DEFAULT_SIM_PORT;
-      const incrementedPort = Math.min(65535, normalizeWsPort(lastPort) + 1);
-      return [...prev, createSimConnection(nextId, DEFAULT_SIM_HOST, String(incrementedPort))];
-    });
-  }, []);
-
-  const handleSimDisconnectConnection = useCallback(
-    (connectionId) => {
-      closeSimConnectionSocket(connectionId);
-      simContextsRef.current.delete(connectionId);
-      simConnectionStatsRef.current.delete(connectionId);
-      clearVehiclesForConnection(connectionId);
-      setConnectionState(connectionId, () => ({
-        connected: false,
-        connecting: false,
-        error: null,
-        status: "Disconnected",
-      }));
-    },
-    [clearVehiclesForConnection, closeSimConnectionSocket, setConnectionState],
-  );
-
-  const handleRemoveSimConnection = useCallback(
-    (connectionId) => {
-      handleSimDisconnectConnection(connectionId);
-      setSimConnections((prev) => prev.filter((connection) => connection.id !== connectionId));
-    },
-    [handleSimDisconnectConnection],
-  );
-
-  const handleSimConnectConnection = useCallback(
-    (connectionId) => {
-      const connection = simConnections.find((item) => item.id === connectionId);
-      if (!connection) {
+  const startSimConnectionAttempt = useCallback(
+    (connectionId, forceReconnect = false) => {
+      const connection = simConnectionsRef.current.find((item) => item.id === connectionId);
+      if (!connection || (!connection.shouldReconnect && !forceReconnect)) {
         return;
       }
 
+      clearSimReconnectTimeout(connectionId);
       closeSimConnectionSocket(connectionId);
       clearVehiclesForConnection(connectionId);
       simContextsRef.current.set(connectionId, {
@@ -796,15 +778,88 @@ function App() {
         if (simSocketsRef.current.get(connectionId) === socket) {
           simSocketsRef.current.delete(connectionId);
         }
+
+        clearVehiclesForConnection(connectionId);
+
+        const currentConnection = simConnectionsRef.current.find((item) => item.id === connectionId);
+        if (!currentConnection?.shouldReconnect) {
+          setConnectionState(connectionId, () => ({
+            connecting: false,
+            connected: false,
+            status: "Disconnected",
+          }));
+          return;
+        }
+
         setConnectionState(connectionId, () => ({
           connecting: false,
           connected: false,
-          status: didOpen ? "Disconnected" : "Unable to connect",
+          status: didOpen ? "Connection lost. Reconnecting in 1s..." : "Unable to connect. Retrying in 1s...",
         }));
-        clearVehiclesForConnection(connectionId);
+
+        if (simReconnectTimeoutsRef.current.has(connectionId)) {
+          return;
+        }
+
+        const timeoutId = window.setTimeout(() => {
+          simReconnectTimeoutsRef.current.delete(connectionId);
+          startSimConnectionAttempt(connectionId);
+        }, 1000);
+        simReconnectTimeoutsRef.current.set(connectionId, timeoutId);
       };
     },
-    [clearVehiclesForConnection, closeSimConnectionSocket, scheduleSimVehiclesFlush, setConnectionState, simConnections],
+    [clearSimReconnectTimeout, clearVehiclesForConnection, closeSimConnectionSocket, scheduleSimVehiclesFlush, setConnectionState],
+  );
+
+  const handleAddSimConnection = useCallback(() => {
+    const nextId = nextSimConnectionIdRef.current;
+    nextSimConnectionIdRef.current += 1;
+    setSimConnections((prev) => {
+      const lastPort = prev.length ? prev[prev.length - 1].port : DEFAULT_SIM_PORT;
+      const incrementedPort = Math.min(65535, normalizeWsPort(lastPort) + 1);
+      return [...prev, createSimConnection(nextId, DEFAULT_SIM_HOST, String(incrementedPort))];
+    });
+  }, []);
+
+  const handleSimDisconnectConnection = useCallback(
+    (connectionId) => {
+      clearSimReconnectTimeout(connectionId);
+      closeSimConnectionSocket(connectionId);
+      simContextsRef.current.delete(connectionId);
+      simConnectionStatsRef.current.delete(connectionId);
+      clearVehiclesForConnection(connectionId);
+      setConnectionState(connectionId, () => ({
+        connected: false,
+        connecting: false,
+        shouldReconnect: false,
+        error: null,
+        status: "Disconnected",
+      }));
+    },
+    [clearSimReconnectTimeout, clearVehiclesForConnection, closeSimConnectionSocket, setConnectionState],
+  );
+
+  const handleRemoveSimConnection = useCallback(
+    (connectionId) => {
+      handleSimDisconnectConnection(connectionId);
+      setSimConnections((prev) => prev.filter((connection) => connection.id !== connectionId));
+    },
+    [handleSimDisconnectConnection],
+  );
+
+  const handleSimConnectConnection = useCallback(
+    (connectionId) => {
+      const connection = simConnectionsRef.current.find((item) => item.id === connectionId);
+      if (!connection) {
+        return;
+      }
+
+      setConnectionState(connectionId, () => ({
+        shouldReconnect: true,
+      }));
+      startSimConnectionAttempt(connectionId, true);
+    },
+    [setConnectionState, startSimConnectionAttempt],
   );
 
   useEffect(
@@ -812,6 +867,10 @@ function App() {
       if (simUiFlushTimeoutRef.current != null) {
         clearTimeout(simUiFlushTimeoutRef.current);
       }
+      for (const timeoutId of simReconnectTimeoutsRef.current.values()) {
+        clearTimeout(timeoutId);
+      }
+      simReconnectTimeoutsRef.current.clear();
       for (const connectionId of simSocketsRef.current.keys()) {
         closeSimConnectionSocket(connectionId);
       }
