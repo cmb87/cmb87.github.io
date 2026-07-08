@@ -183,21 +183,8 @@ function toSimSample(payload, context, motionScale, tailsitterPitchCorrection = 
   const renderQuat = NED_TO_SCENE_QUAT.clone().multiply(telemetryQuat);
 
   const absoluteNed = [Number(positionNed[0]) || 0, Number(positionNed[1]) || 0, Number(positionNed[2]) || 0];
-  if (context.originNed == null) {
-    context.originNed = [...absoluteNed];
-  }
-
-  const relativeNed = [
-    absoluteNed[0] - context.originNed[0],
-    absoluteNed[1] - context.originNed[1],
-    absoluteNed[2] - context.originNed[2],
-  ];
-  const scenePosition = toSceneVector(relativeNed);
-  const displayPosition = [
-    scenePosition[0] * motionScale,
-    Math.max(0, scenePosition[1] * motionScale),
-    scenePosition[2] * motionScale,
-  ];
+  const scenePosition = toSceneVector(absoluteNed);
+  const displayPosition = scenePosition.map((value) => value * motionScale);
 
   let velocity = [0, 0, 0];
   const dt = context.lastTimeSec != null ? timeUsec * 1e-6 - context.lastTimeSec : 0;
@@ -209,7 +196,7 @@ function toSimSample(payload, context, motionScale, tailsitterPitchCorrection = 
     ];
   }
 
-  const altitudeRelative = -relativeNed[2];
+  const altitudeRelative = -absoluteNed[2];
   const altitudeAmsl = Number(payload?.lla?.alt_m);
   const latDeg = Number(payload?.lla?.lat_deg);
   const lonDeg = Number(payload?.lla?.lon_deg);
@@ -680,7 +667,6 @@ function App() {
       clearVehiclesForConnection(connectionId);
       simContextsRef.current.set(connectionId, {
         firstTimeUsec: null,
-        originNed: null,
         lastPosition: null,
         lastTimeSec: null,
       });
